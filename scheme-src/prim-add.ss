@@ -1,0 +1,3 @@
+(define main
+  (lambda ()
+    (+# 1 2)))

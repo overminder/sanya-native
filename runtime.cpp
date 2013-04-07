@@ -19,3 +19,9 @@ void Runtime::handleArgCountMismatch(Object *wat, intptr_t argc) {
   exit(1);
 }
 
+void Runtime::traceObject(Object *wat) {
+  dprintf(2, "[Runtime::Trace] ");
+  wat->displayDetail(2);
+  dprintf(2, "\n");
+}
+

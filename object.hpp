@@ -91,7 +91,7 @@ TAG_LIST(MK_TAG_AS)
 #define MK_ATTR(name, offset, type) \
   type &name() { return at<offset ## Offset, type>(); }
 
-#define ATTR_LIST(V)                                     \
+#define ATTR_LIST(V)                                            \
   V(car,            kCar,            Object *)                  \
   V(cdr,            kCdr,            Object *)                  \
   V(funcArity,      kFuncArity,      intptr_t)                  \

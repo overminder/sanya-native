@@ -1,5 +1,5 @@
 CXXFLAGS += $(INCLUDE) -std=c++0x
-CXXFLAGS += -Wno-pmf-conversions -O0 -g
+CXXFLAGS += -Wno-pmf-conversions -O2 -g
 
 LDFLAGS += -lasmjit -L/usr/local/lib -g
 

@@ -23,9 +23,23 @@ static void forEachListItem(Object *xs, F f) {
   }
 }
 
+static Object *listToVector(Object *xs, std::vector<Object *> *out) {
+  Object *restOut;
+  forEachListItem(xs, [&](Object *x, intptr_t _, Object *rest) -> bool {
+    out->push_back(x);
+    restOut = rest;
+    return true;
+  });
+  return restOut;
+}
+
 static void unpackListItems(Object *xs, intptr_t max,
-                            Object **out, intptr_t *len) {
-  forEachListItem(xs, [&](Object *x, intptr_t i, Object *_) -> bool {
+                            Object **out, intptr_t *len,
+                            Object **restOut = NULL) {
+  forEachListItem(xs, [&](Object *x, intptr_t i, Object *rest) -> bool {
+    if (restOut) {
+      *restOut = rest;
+    }
     if (i < max) {
       out[i] = x;
       if (len) *len = i + 1;
@@ -112,6 +126,7 @@ CGFunction::CGFunction(Object *name, Object *args, Object *body,
 void CGFunction::makeClosure() {
   assert(!closure);
   closure = Object::newClosure(NULL);
+  // dprintf(2, "[CodeGen::makeClosure] %s => %p\n", name->rawSymbol(), closure);
   closureBox = Object::newPair(closure, Object::newNil());
 }
 
@@ -200,12 +215,12 @@ void CGFunction::compileFunction() {
 
     myArity = nth + 1;
 
+    __ push(argRegs[nth + 1]);
     shiftLocal(1);
-    addNewLocal(arg->rawSymbol());
     // dprintf(2, "[MoveArgs] %s [%s] is at %ld\n",
     //         name->rawSymbol(), arg->rawSymbol(),
     //         lookupLocal(arg->rawSymbol()));
-    __ push(argRegs[nth + 1]);
+    addNewLocal(arg->rawSymbol());
     return true;
   });
 
@@ -225,7 +240,7 @@ void CGFunction::compileFunction() {
   rawFunc = Object::newFunction(rawPtr, myArity, name,
       /* reloc */ Object::newNil(), 0);
 
-  dprintf(2, "[Function compiled] %s @%p\n", name->rawSymbol(),
+  dprintf(2, "[CodeGen::compileFunction] %s @%p\n", name->rawSymbol(),
           rawFunc->funcCodeAs<void *>());
 
   closure->raw()->cloInfo() = rawFunc;
@@ -271,7 +286,10 @@ void CGFunction::compileExpr(Object *expr, bool isTail) {
     }
     else {
       Object *box = parent->lookupGlobal(expr->rawSymbol(), &ok);
-      assert(ok);
+      if (!ok) {
+        dprintf(2, "lookupGlobal: %s not found\n", expr->rawSymbol());
+        exit(1);
+      }
       __ mov(rax, box->as<intptr_t>());
       __ mov(rax, qword_ptr(rax, -RawObject::kPairTag));
       // XXX: add to ptr offset vector
@@ -280,32 +298,38 @@ void CGFunction::compileExpr(Object *expr, bool isTail) {
       break;
     }
 
-#define isDefine(_) false
-#define compileDefine(_)
-#define isSet(_) false
-#define compileSet(_)
-#define isIf(_) false
-#define compileIf(_)
-#define isBegin(_) false
-#define compileBegin(_)
-
   case RawObject::kPairTag:
+  {
+    std::vector<Object *>xs;
+    Object *rest = listToVector(expr, &xs);
+    assert(rest->isNil());
+
     // Check for define
-    if (isDefine(expr)) {
-      compileDefine(expr);
+    if (tryIf(xs, isTail)) {
+      break;
     }
-    else if (isSet(expr)) {
-      compileSet(expr);
+    else if (tryQuote(xs)) {
+      break;
     }
-    else if (isIf(expr)) {
-      compileIf(expr);
-    }
-    else if (isBegin(expr)) {
-      compileBegin(expr);
+    else if (tryPrimOp(xs)) {
+      break;
     }
     else {
       // Should be funcall
-      compileCall(expr, isTail);
+      compileCall(xs, isTail);
+    }
+    break;
+  }
+
+  case RawObject::kSingletonTag:
+    if (expr->isTrue() || expr->isFalse()) {
+      emitConst(expr);
+    }
+    else if (expr->isNil()) {
+      assert(0 && "Unexpected nil in code");
+    }
+    else {
+      assert(0 && "Unexpected singleton in code");
     }
     break;
 
@@ -314,17 +338,22 @@ void CGFunction::compileExpr(Object *expr, bool isTail) {
   }
 }
 
-void CGFunction::compileCall(Object *expr, bool isTail) {
+void CGFunction::compileCall(const std::vector<Object *> &xs, bool isTail) {
   // Evaluate func and args
-  intptr_t argc;
-  forEachListItem(expr, [&](Object *x, intptr_t nth, Object *_u2) -> bool {
-    assert(nth < 6);
-    compileExpr(x, false);
-    __ pop(argRegs[nth]);
+  intptr_t argc = xs.size() - 1;
+  assert(argc < 6);
+
+  for (auto arg : xs) {
+    compileExpr(arg, false);
+  }
+
+  intptr_t nth = 0;
+  for (auto arg : xs) {
+    // Reverse pop
+    __ pop(argRegs[argc - nth]);
     shiftLocal(-1);
-    argc = nth;
-    return true;
-  });
+    ++nth;
+  }
 
   // Check closure type
   __ mov(rax, rdi);
@@ -342,6 +371,7 @@ void CGFunction::compileCall(Object *expr, bool isTail) {
 
   // Extract and call the code pointer
   // XXX: where is the frameDescr?
+  // XXX: how about stack overflow checking?
   __ mov(frameDescrReg, 0);
   __ mov(rax, qword_ptr(rdi, -RawObject::kClosureTag));
   __ lea(rax, qword_ptr(rax, RawObject::kFuncCodeOffset));
@@ -378,5 +408,103 @@ void CGFunction::compileCall(Object *expr, bool isTail) {
   }
 }
 
+bool CGFunction::tryQuote(const std::vector<Object *> &xs) {
+  if (xs.size() != 2 || !xs[0]->isSymbol() ||
+      strcmp(xs[0]->rawSymbol(), "quote") != 0) {
+    return false;
+  }
+  emitConst(xs[1]);
+  return true;
+}
+
+bool CGFunction::tryIf(const std::vector<Object *> &xs, bool isTail) {
+  if (xs.size() != 4 || !xs[0]->isSymbol() ||
+      strcmp(xs[0]->rawSymbol(), "if") != 0) {
+    return false;
+  }
+
+  Label labelFalse = __ newLabel(),
+        labelDone  = __ newLabel();
+
+  // Pred
+  compileExpr(xs[1]);
+  __ pop(rax);
+  shiftLocal(-1);
+
+  __ cmp(rax, Object::newFalse()->as<intptr_t>());
+  __ je(labelFalse);
+
+  compileExpr(xs[2], isTail);
+  __ jmp(labelDone);
+
+  // Since we need to balance out those two branches
+  shiftLocal(-1);
+  __ bind(labelFalse);
+  compileExpr(xs[3], isTail);
+
+  __ bind(labelDone);
+
+  return true;
+}
+
+// Primitive operator, without checks
+bool CGFunction::tryPrimOp(const std::vector<Object *> &xs) {
+  if (xs.size() < 1 || !xs[0]->isSymbol()) {
+    return false;
+  }
+
+  std::string opName = xs[0]->rawSymbol();
+
+  //dprintf(2, "opName = %s, size = %ld\n", opName.c_str(), xs.size());
+
+  if (opName == "+#" && xs.size() == 3) {
+    compileExpr(xs[1]);
+    compileExpr(xs[2]);
+    __ pop(rax);
+    shiftLocal(-1);
+    __ add(rax, qword_ptr(rsp));
+    __ sub(rax, RawObject::kFixnumTag);
+    __ mov(qword_ptr(rsp), rax);
+  }
+  else if (opName == "-#" && xs.size() == 3) {
+    compileExpr(xs[1]);
+    compileExpr(xs[2]);
+    __ mov(rax, qword_ptr(rsp, kPtrSize));
+    __ sub(rax, qword_ptr(rsp));
+    __ add(rax, RawObject::kFixnumTag);
+    __ add(rsp, kPtrSize);
+    shiftLocal(-1);
+    __ mov(qword_ptr(rsp), rax);
+  }
+  else if (opName == "<#" && xs.size() == 3) {
+    compileExpr(xs[1]);
+    compileExpr(xs[2]);
+    __ pop(rax);
+    shiftLocal(-1);
+    __ cmp(rax, qword_ptr(rsp));
+    __ mov(rcx, Object::newTrue()->as<intptr_t>());
+    __ mov(rax, Object::newFalse()->as<intptr_t>());
+    __ cmovg(rax, rcx);
+    __ mov(qword_ptr(rsp), rax);
+  }
+  else if (opName == "trace#" && xs.size() == 3) {
+    compileExpr(xs[1]);
+    __ pop(rdi);
+    shiftLocal(-1);
+    __ call(reinterpret_cast<intptr_t>(&Runtime::traceObject));
+    compileExpr(xs[2]);
+  }
+  else {
+    return false;
+  }
+
+  return true;
+}
+
+void CGFunction::emitConst(Object *x, bool needsGc) {
+  __ mov(rax, x->as<intptr_t>());
+  __ push(rax);
+  shiftLocal(1);
+}
 
 #undef __

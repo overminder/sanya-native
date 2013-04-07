@@ -37,14 +37,20 @@ class CGFunction {
   void compileFunction();
 
   void compileBody(Object *exprs, bool isTail);
-  void compileExpr(Object *expr, bool isTail);
+  void compileExpr(Object *expr, bool isTail = false);
 
-  void compileCall(Object *expr, bool isTail);
+  void compileCall(const std::vector<Object *> &xs, bool isTail);
 
   // Put placeholders there
   void emitFuncHeader();
 
  private:
+  bool tryIf(const std::vector<Object *> &xs, bool isTail);
+  bool tryQuote(const std::vector<Object *> &xs);
+  bool tryPrimOp(const std::vector<Object *> &xs);
+
+  void emitConst(Object *, bool needsGc = false);
+
   intptr_t lookupLocal(const std::string &name) {
     auto iter = locals.find(name);
     if (iter != locals.end()) {

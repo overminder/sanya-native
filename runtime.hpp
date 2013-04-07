@@ -7,8 +7,12 @@ class Object;
 
 class Runtime {
  public:
+  // Error handlers
   static void handleNotAClosure(Object *);
   static void handleArgCountMismatch(Object *, intptr_t);
+
+  // Debug
+  static void traceObject(Object *);
 };
 
 #endif
