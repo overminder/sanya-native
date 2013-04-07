@@ -14,6 +14,7 @@ class Parser {
     : input(input)
     , ix(0) { }
   
+  Object *parseProg(bool *);
   Object *parse(bool *);
   Object *parseList(char);
   Object *parseFixnum(char);

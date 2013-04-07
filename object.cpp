@@ -78,7 +78,7 @@ void Object::displayDetail(int fd) {
 
   case RawObject::kClosureTag:
     dprintf(fd, "<Closure ");
-    raw->cloInfo()->funcName()->printToFd(fd);
+    raw->cloInfo()->funcName()->displayDetail(fd);
     dprintf(fd, ">", raw);
     break;
 
@@ -94,7 +94,6 @@ void Object::displayDetail(int fd) {
 
 void Object::displayListDetail(int fd) {
   raw()->car()->displayDetail(fd);
-  dprintf(fd, " ");
   Object *curr = raw()->cdr();
 
   while (curr->isPair()) {

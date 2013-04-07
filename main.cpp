@@ -53,12 +53,15 @@ int main(int argc, char **argv) {
   Parser parser(input);
 
   bool parseOk;
-  Object *ast = parser.parse(&parseOk);
+  Object *ast = parser.parseProg(&parseOk);
   assert(parseOk);
+
+  //ast->displayDetail(2);
 
   Object *mainClo = cg.genModule(ast);
 
-  callScheme_0(mainClo);
+  callScheme_0(mainClo)->displayDetail(1);
+  Object::printNewLine(1);
 
   return 0;
 }

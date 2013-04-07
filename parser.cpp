@@ -10,6 +10,21 @@ static Object *vectorToScheme(const std::vector<Object *> &vec) {
   return xs;
 }
 
+Object *Parser::parseProg(bool *outOk) {
+  bool ok;
+  std::vector<Object *> xs;
+
+  while (true) {
+    Object *x = parse(&ok);
+    if (!ok) {
+      break;
+    }
+    xs.push_back(x);
+  }
+  ok = *outOk = !hasNext();
+  return ok ? vectorToScheme(xs) : NULL;
+}
+
 Object *Parser::parse(bool *ok) {
   assert(hasNext());
   char c;
@@ -91,7 +106,13 @@ Object *Parser::parseAtom(char open) {
 
   xs << open;
 
-  while (hasNext() && !isspace(c = getNext())) {
+  while (hasNext()) {
+    c = getNext();
+    if (isspace(c) || c == '[' || c == '(' ||
+        c == ']' || c == ')') {
+      putBack();
+      break;
+    }
     xs << c;
   }
   return Object::newSymbolFromC(xs.str().c_str());

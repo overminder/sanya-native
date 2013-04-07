@@ -158,6 +158,10 @@ class Object : public Base<Object> {
   }
 SINGLETONS(MK_SINGLETON)
 #undef MK_SINGLETON
+
+#define CHECK_SINGLETON(name) \
+  bool is ## name() { return this == new ## name(); }
+SINGLETONS(CHECK_SINGLETON)
 #undef SINGLETONS
 
   static RawObject *newFunction(void *raw, intptr_t arity,

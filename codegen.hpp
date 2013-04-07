@@ -18,6 +18,8 @@ class CGModule {
 
   Object *genModule(Object *);
 
+  Object *lookupGlobal(const std::string &, bool *, bool wantBox = true);
+
  private:
   std::unordered_map<std::string, CGFunction *> cgfuncs;
 
@@ -28,13 +30,16 @@ class CGFunction {
  public:
   CGFunction(Object *name, Object *args, Object *body, CGModule *);
 
-  // Make an empty closure
-  Object *makeClosure();
+  // Make an empty closure, and a box to hold the closure
+  void makeClosure();
 
   // Do the actual compilation, reloc, etc
   void compileFunction();
 
+  void compileBody(Object *exprs, bool isTail);
   void compileExpr(Object *expr, bool isTail);
+
+  void compileCall(Object *expr, bool isTail);
 
   // Put placeholders there
   void emitFuncHeader();
@@ -53,8 +58,10 @@ class CGFunction {
   }
 
   void shiftLocal(intptr_t n) {
-    for (auto iter : locals) {
-      iter.second += n;
+    for (auto iter = locals.begin(); iter != locals.end(); ++iter) {
+      //dprintf(2, "[shiftLocal] %s: %ld => %ld\n", iter->first.c_str(),
+      //        iter->second, iter->second + n);
+      iter->second += n;
     }
   }
 
@@ -64,6 +71,7 @@ class CGFunction {
 
   RawObject *rawFunc;
   Object *closure;
+  Object *closureBox;
   std::unordered_map<std::string, intptr_t> locals;
   std::vector<Object *> ptrOffsets;
   std::unordered_map<std::string, Object *> relocMap;
