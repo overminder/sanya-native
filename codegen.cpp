@@ -142,15 +142,14 @@ void CGFunction::emitFuncHeader() {
 
 // S2S (Scheme to scheme) calling convention:
 //
-// After call instr:
-//
-// [...]
-// retAddr <- %rsp
-// r10 = frameDescr
-// rdi = thisClosure
-// rsi = arg0
-// rdx = arg1
-// rcx = arg2
+// Stack after call instr:
+//   [...]
+//   retAddr <- %rsp
+//   r10 = frameDescr
+//   rdi = thisClosure
+//   rsi = arg0
+//   rdx = arg1
+//   rcx = arg2
 //
 // So the prologue should be:
 //   push r10

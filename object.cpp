@@ -40,10 +40,6 @@ void Object::printToFd(int fd) {
   }
 }
 
-void Object::printNewLine(int fd) {
-  dprintf(fd, "\n");
-}
-
 void Object::displayDetail(int fd) {
   RawObject *raw = unTag<RawObject>();
   switch (getTag()) {

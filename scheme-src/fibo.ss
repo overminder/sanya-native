@@ -1,6 +1,6 @@
 (define main
   (lambda ()
-    (fibo 40)))
+    (fibo 10)))
 
 (define fibo
   (lambda (n)

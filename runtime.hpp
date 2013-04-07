@@ -13,6 +13,9 @@ class Runtime {
 
   // Debug
   static void traceObject(Object *);
+
+  // Library
+  static void printNewLine(int fd);
 };
 
 #endif

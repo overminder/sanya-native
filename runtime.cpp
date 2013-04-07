@@ -25,3 +25,7 @@ void Runtime::traceObject(Object *wat) {
   dprintf(2, "\n");
 }
 
+void Runtime::printNewLine(int fd) {
+  dprintf(fd, "\n");
+}
+

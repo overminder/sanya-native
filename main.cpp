@@ -5,6 +5,7 @@
 #include "object.hpp"
 #include "parser.hpp"
 #include "codegen.hpp"
+#include "runtime.hpp"
 
 typedef Object *(SchemeFn_0)(Object *);
 typedef Object *(SchemeFn_1)(Object *, Object *);
@@ -61,7 +62,7 @@ int main(int argc, char **argv) {
   Object *mainClo = cg.genModule(ast);
 
   callScheme_0(mainClo)->displayDetail(1);
-  Object::printNewLine(1);
+  Runtime::printNewLine(1);
 
   return 0;
 }
