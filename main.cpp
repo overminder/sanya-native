@@ -4,7 +4,7 @@
 
 #include "object.hpp"
 #include "parser.hpp"
-#include "codegen.hpp"
+//#include "codegen.hpp"
 #include "runtime.hpp"
 
 typedef Object *(SchemeFn_0)(Object *);
@@ -34,36 +34,43 @@ void readAll(FILE *f, std::string *xs) {
   }
 }
 
-int main(int argc, char **argv) {
+void gcMain(int argc, char **argv) {
   FILE *fin;
-  CGModule cg;
+  //CGModule cg;
   std::string input;
 
   if (argc == 2) {
     fin = fopen(argv[1], "r");
     if (!fin) {
       perror(argv[1]);
-      return 1;
+      exit(1);
     }
   }
   else {
     fin = stdin;
   }
   readAll(fin, &input);
+  if (fin != stdin) {
+    fclose(fin);
+  }
 
   Parser parser(input);
 
   bool parseOk;
-  Object *ast = parser.parseProg(&parseOk);
+  Handle ast = parser.parseProg(&parseOk);
   assert(parseOk);
 
-  //ast->displayDetail(2);
+  ast->displayDetail(2);
 
-  Object *mainClo = cg.genModule(ast);
+  //Object *mainClo = cg.genModule(ast);
 
-  callScheme_0(mainClo)->displayDetail(1);
-  Runtime::printNewLine(1);
+  //callScheme_0(mainClo)->displayDetail(1);
+  //Runtime::printNewLine(1);
+}
 
+int main(int argc, char **argv) {
+  gcMain(argc, argv);
+  ThreadState::global().destroy();
   return 0;
 }
 

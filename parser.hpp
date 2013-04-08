@@ -25,7 +25,7 @@ class Parser {
   }
 
   bool hasNext() {
-    return ix < input.length();
+    return ix < (intptr_t) input.length();
   }
 
   char getNext() {

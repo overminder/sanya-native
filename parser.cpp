@@ -2,27 +2,30 @@
 #include "object.hpp"
 #include "parser.hpp"
 
-static Object *vectorToScheme(const std::vector<Object *> &vec) {
-  Object *xs = Object::newNil();
-  for (int i = vec.size() - 1; i >= 0; --i) {
-    xs = Object::newPair(vec[i], xs);
-  }
-  return xs;
-}
-
 Object *Parser::parseProg(bool *outOk) {
   bool ok;
-  std::vector<Object *> xs;
+  Handle head = Object::newNil(),
+         tail = Object::newNil();
 
   while (true) {
-    Object *x = parse(&ok);
+    Handle x = parse(&ok);
     if (!ok) {
       break;
     }
-    xs.push_back(x);
+
+    if (head->isNil()) {
+      head = tail = Object::newPair(x, Object::newNil());
+    }
+    else {
+      // XXX: need to separate lhs with rhs to avoid memory corruption
+      // since lhs (raw()->cdr()) will be evaluated before rhs (t).
+      Handle t = Object::newPair(x, Object::newNil());
+      tail->raw()->cdr() = t.getPtr();
+      tail = tail->raw()->cdr();
+    }
   }
   ok = *outOk = !hasNext();
-  return ok ? vectorToScheme(xs) : NULL;
+  return ok ? head.getPtr() : NULL;
 }
 
 Object *Parser::parse(bool *ok) {
@@ -51,20 +54,34 @@ Object *Parser::parseList(char open) {
   char c;
   char close = open == '(' ? ')' : ']';
   bool ok;
-  std::vector<Object *> xs;
 
-  while (true) {
+  Handle head = Object::newNil(),
+         tail = Object::newNil();
+
+  while (hasNext()) {
     switch ((c = getNextSkipWS())) {
       case ']': case ')':
         assert(close == c);
-        return vectorToScheme(xs);
+        return head.getPtr();
 
       default:
         putBack();
-        xs.push_back(parse(&ok));
-        assert(ok);
+        {
+          Handle curr = parse(&ok);
+          assert(ok);
+
+          if (head->isNil()) {
+            head = tail = Object::newPair(curr.getPtr(), Object::newNil());
+          }
+          else {
+            Handle t = Object::newPair(curr.getPtr(), Object::newNil());
+            tail->raw()->cdr() = t.getPtr();
+            tail = tail->raw()->cdr();
+          }
+        }
     }
   }
+  assert(0);
 }
 
 Object *Parser::parseFixnum(char open) {
@@ -83,9 +100,11 @@ Object *Parser::parseFixnum(char open) {
     default:
       putBack();
       xs >> val;
-      return Object::newFixnum(val);
+      goto done;
     }
   }
+done:
+  return Object::newFixnum(val);
 }
 
 Object *Parser::parseAtom(char open) {

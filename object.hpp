@@ -1,12 +1,17 @@
 #ifndef OBJECT_HPP
 #define OBJECT_HPP
 
+#include <assert.h>
 #include <string.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <stdio.h>
 
+#include "util.hpp"
+#include "gc.hpp"
+
 class Object;
+class ThreadState;
 
 template <typename This>
 class Base {
@@ -16,18 +21,6 @@ class Base {
 
   template<typename T>
   static constexpr This *from(T wat) { return reinterpret_cast<This *>(wat); }
-
-  template<int Bits>
-  static intptr_t align(intptr_t orig) {
-    uintptr_t mask = -1,
-              unmasked;
-    mask <<= Bits;
-    mask = ~mask;
-    if ((unmasked = orig & mask)) {
-      orig += (1 << Bits) - unmasked;
-    }
-    return orig;
-  }
 };
 
 // Untagged
@@ -80,6 +73,10 @@ class RawObject : public Base<RawObject> {
     return reinterpret_cast<Object *>(as<intptr_t>() + tagVal);
   }
 
+  Object *tagWith(Tag wat) {
+    return reinterpret_cast<Object *>(as<intptr_t>() + wat);
+  }
+
 #define MK_TAG_AS(name) \
   Object *tagAs ## name() { return tag<k ## name ## Tag>();  }
 
@@ -126,13 +123,15 @@ TAG_LIST(MK_TAG_AS)
   typedef void (*NullaryFn) ();
 };
 
+
 // Tagged
 class Object : public Base<Object> {
  public:
-  static Object *newPair(Object *car, Object *cdr) {
+  static Object *newPair(const Handle &car, const Handle &cdr) {
     RawObject *pair = alloc<RawObject>(16);
-    pair->car() = car;
-    pair->cdr() = cdr;
+    pair->car() = car.getPtr();
+    pair->cdr() = cdr.getPtr();
+    dprintf(2, "[Object::newPair] %p\n", pair);
     return pair->tagAsPair();
   }
 
@@ -144,7 +143,7 @@ class Object : public Base<Object> {
   static Object *newSymbolFromC(const char *src) {
     RawObject *raw;
     size_t len = strlen(src);
-    raw = alloc<RawObject>(align<RawObject::kTagShift>(len + 1));
+    raw = alloc<RawObject>(Util::align<RawObject::kTagShift>(len + 1));
     memcpy(raw, src, len + 1);
     return raw->tagAsSymbol();
   }
@@ -211,6 +210,25 @@ SINGLETONS(CHECK_SINGLETON)
     return reinterpret_cast<T *>(allocRaw(size));
   }
 
+  bool isHeapAllocated() {
+    switch (getTag()) {
+    case RawObject::kPairTag:
+    case RawObject::kSymbolTag:
+      return true;
+
+    case RawObject::kSingletonTag:
+    case RawObject::kFixnumTag:
+      return false;
+
+    case RawObject::kClosureTag:
+    case RawObject::kVectorTag:
+      return true;
+
+    default:
+      assert(0 && "Object::isHeapAllocated: not a tagged object");
+    }
+  }
+
   RawObject::Tag getTag() {
     return (RawObject::Tag) (as<intptr_t>() & 0xf);
   }
@@ -234,7 +252,7 @@ SINGLETONS(CHECK_SINGLETON)
 
   static void *allocRaw(size_t size) {
     // XXX gc here
-    return malloc(size);
+    return ThreadState::global().gcAlloc(size);
   }
 
   // Library functions
@@ -242,6 +260,9 @@ SINGLETONS(CHECK_SINGLETON)
   static void printNewLine(int fd);
   void displayDetail(int fd);
   void displayListDetail(int fd);
+
+  // Gc support
+  void gcScavenge(ThreadState *);
 };
 
 #endif

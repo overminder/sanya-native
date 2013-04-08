@@ -1,4 +1,5 @@
 #include "object.hpp"
+#include "gc.hpp"
 
 void Object::printToFd(int fd) {
   RawObject *raw = unTag<RawObject>();
@@ -75,7 +76,7 @@ void Object::displayDetail(int fd) {
   case RawObject::kClosureTag:
     dprintf(fd, "<Closure ");
     raw->cloInfo()->funcName()->displayDetail(fd);
-    dprintf(fd, ">", raw);
+    dprintf(fd, ">");
     break;
 
   case RawObject::kVectorTag:
@@ -101,6 +102,44 @@ void Object::displayListDetail(int fd) {
   if (curr != newNil()) {
     dprintf(fd, " . ");
     curr->displayDetail(fd);
+  }
+}
+
+void Object::gcScavenge(ThreadState *ts) {
+  switch (getTag()) {
+    case RawObject::kPairTag:
+      ts->gcScavenge(&raw()->car());
+      ts->gcScavenge(&raw()->cdr());
+      break;
+
+    case RawObject::kSymbolTag:
+      break;
+
+    case RawObject::kSingletonTag:
+    case RawObject::kFixnumTag:
+      assert(0 && "Object::gcScavenge: not heap allocated");
+
+    case RawObject::kClosureTag:
+    {
+      RawObject *info  = raw()->cloInfo();
+      Object **payload = raw()->cloPayload();
+      for (intptr_t i = 0; i < info->funcNumPayload(); ++i) {
+        ts->gcScavenge(payload + i);
+      }
+      ts->gcScavenge(&info->funcName());
+      ts->gcScavenge(&info->funcReloc());
+      break;
+    }
+    case RawObject::kVectorTag:
+    {
+      Object **elems = &raw()->vectorElem();
+      for (intptr_t i = 0; i < raw()->vectorSize(); ++i) {
+        ts->gcScavenge(elems + i);
+      }
+      break;
+    }
+    default:
+      assert(0 && "Object::gcScavenge: not a tagged object");
   }
 }
 

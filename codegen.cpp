@@ -269,8 +269,7 @@ void CGFunction::compileExpr(Object *expr, bool isTail) {
 
   switch (expr->getTag()) {
   case RawObject::kFixnumTag:
-    __ push(expr->as<intptr_t>());
-    shiftLocal(1);
+    emitConst(expr, false);
     break;
 
   case RawObject::kSymbolTag:
