@@ -50,10 +50,12 @@ class CGModule {
   Handle symDefine,
          symLambda,
          symQuote,
+         symBegin,
          symIf,
          symPrimAdd,
          symPrimSub,
          symPrimLt,
+         symPrimCons,
          symPrimTrace,
          symMain;
 
@@ -71,6 +73,9 @@ class CGFunction {
   // Put placeholders there
   void emitFuncHeader();
 
+  // Invariant: cannot GC during single function compilation, since some of
+  // the generated pointers are inside the AsmJit's assembler buffer.
+  // XXX: Fix it by utilizing reloc is fine, but it's kind of...
   void compileFunction();
   void compileBody(const Handle &exprs, intptr_t start, bool isTail);
   void compileExpr(const Handle &expr, bool isTail = false);
@@ -78,11 +83,28 @@ class CGFunction {
 
   bool tryIf(const Handle &expr, bool isTail);
   bool tryQuote(const Handle &expr);
+  bool tryBegin(const Handle &expr, bool isTail);
   bool tryPrimOp(const Handle &expr, bool isTail);
 
-  void emitConst(const Handle &expr);
+  intptr_t getThisClosure();
+  intptr_t getFrameDescr();
 
+  void recordReloc(const Handle &e);
   void recordLastPtrOffset();
+  intptr_t makeFrameDescr();
+
+  // Also records virtual frame
+  void pushObject(const Handle &);
+  void pushInt(intptr_t);
+  enum IsPtr { kIsNotPtr = 0, kIsPtr = 1 };
+  void pushReg(const AsmJit::GpReg &r, IsPtr isPtr);
+  void pushVirtual(IsPtr isPtr);
+  void popSome(intptr_t n = 1);
+  void popVirtual(intptr_t);
+  void popFrame();
+  // But don't pop virtual. Used by tailcall.
+  void popPhysicalFrame();
+  void popReg(const AsmJit::GpReg &r);
 
   intptr_t lookupLocal(const Handle &name) {
     bool ok;
@@ -96,13 +118,18 @@ class CGFunction {
   }
 
   void addNewLocal(const Handle &name) {
-    locals = Util::assocInsert(locals, name, Object::newFixnum(0), Util::kPtrEq);
+    locals = Util::assocInsert(
+        locals, name, Object::newFixnum(0), Util::kPtrEq);
   }
 
   void shiftLocal(intptr_t n);
 
  private:
   AsmJit::X86Assembler xasm;
+
+  // Offset between current rsp and the stack slot for return address,
+  // in ptrSize (8).
+  intptr_t frameSize;
 
   Handle name, lamBody;
   CGModule *parent;
@@ -111,8 +138,17 @@ class CGFunction {
   Handle closure;
   // Maps symbol to index
   Handle locals;
-  // Growable array of (size . offset)
+
+  // (# #t #f #t ...) vector of stack items. 
+  // True if is pointer
+  Handle stackItemList;
+
+  // Growable array of #<Fixnum const-offset>
   Handle ptrOffsets;
+
+  // Growable array of objects. Will be used to patch the generated
+  // code.
+  Handle relocArray;
 
   friend class CGModule;
 };

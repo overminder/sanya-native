@@ -6,9 +6,13 @@
 using namespace AsmJit;
 
 static const int kPtrSize = sizeof(void *);
-static const auto kClosureReg = rdi;
 static const GpReg kArgRegs[5] = { rsi, rdx, rcx, r8, r9 };
-static const auto kFrameDescrReg = r10;
+static const GpReg kArgRegsWithClosure[6] = { rdi, rsi, rdx, rcx, r8, r9 };
+static const auto kClosureReg    = rdi,
+                  kFrameDescrReg = r10,
+                  kHeapPtr       = r12,
+                  kHeapLimit     = r13,
+                  kThreadState   = r14;
 
 Module::Module() {
   root = Object::newVector(2, Object::newNil());
@@ -96,10 +100,12 @@ CGModule::CGModule() {
   symDefine    = Object::internSymbol("define");
   symLambda    = Object::internSymbol("lambda");
   symQuote     = Object::internSymbol("quote");
+  symBegin     = Object::internSymbol("begin");
   symIf        = Object::internSymbol("if");
   symPrimAdd   = Object::internSymbol("+#");
   symPrimSub   = Object::internSymbol("-#");
   symPrimLt    = Object::internSymbol("<#");
+  symPrimCons  = Object::internSymbol("cons#");
   symPrimTrace = Object::internSymbol("trace#");
   symMain      = Object::internSymbol("main");
 }
@@ -167,17 +173,20 @@ intptr_t CGModule::lookupGlobal(const Handle &name) {
 
 CGFunction::CGFunction(const Handle &name, const Handle &lamBody,
                        CGModule *parent)
-  : name(name)
+  : frameSize(0)
+  , name(name)
   , lamBody(lamBody)
   , parent(parent)
   , locals(Util::newAssocList())
+  , stackItemList(Object::newNil())
   , ptrOffsets(Util::newGrowableArray())
+  , relocArray(Util::newGrowableArray())
 { }
 
 const Handle &CGFunction::makeClosure() {
   assert(!closure.getPtr());
   closure = Object::newClosure(NULL);
-  //dprintf(2, "[CodeGen::makeClosure] %s => %p\n", name->rawSymbol(), closure);
+  //dprintf(2, "[mkClosure] %s => %p\n", name->rawSymbol(), closure);
   return closure;
 }
 
@@ -195,10 +204,10 @@ void CGFunction::compileFunction() {
   emitFuncHeader();
 
   // push frameDescr
-  __ push(kFrameDescrReg);
+  pushReg(kFrameDescrReg, kIsNotPtr);
 
   // push thisClosure
-  __ push(kClosureReg);
+  pushReg(kClosureReg, kIsPtr);
 
   Handle argArray = Util::newGrowableArray();
   Handle restArgs = listToArray(Util::arrayAt(lamBody, 1), &argArray);
@@ -213,32 +222,42 @@ void CGFunction::compileFunction() {
     assert(lookupLocal(arg) == -1);
 
     // +1 for closure reg
-    __ push(kArgRegs[i]);
-    shiftLocal(1);
+    pushReg(kArgRegs[i], kIsPtr);
     addNewLocal(arg);
   }
 
   compileBody(lamBody, 2, true);
 
   // Return last value on the stack
-  __ pop(rax);
-  shiftLocal(-1);
-  __ add(rsp, kPtrSize * (2 + Util::assocLength(locals)));
+  popReg(rax);
+  popFrame();
   __ ret();
 
   // Create function and patch closure.
   void *rawPtr = __ make();
 
   Handle trimmedConstOffsets = Util::arrayToVector(ptrOffsets);
+
   rawFunc = Object::newFunction(rawPtr, arity, name,
       /* const ptr offset array */ trimmedConstOffsets,
       /* num payload */ 0);
   closure->raw()->cloInfo() = rawFunc;
 
-  Util::logObj("CompileFunction Done", closure);
+  // Patch relocs
+  for (intptr_t i = 0, len = Util::arrayLength(relocArray);
+       i < len; ++i) {
+    intptr_t base = rawFunc->funcCodeAs<intptr_t>();
+    Handle ptrVal = Util::arrayAt(relocArray, i);
+    intptr_t offset = Util::arrayAt(ptrOffsets, i)->fromFixnum();
+    Object **addr = reinterpret_cast<Object **>(base + offset);
+    *addr = ptrVal;
+  }
+
+  Util::logPtr("CompileFunction Done", rawFunc->funcCodeAs<void *>());
 }
 
-void CGFunction::compileBody(const Handle &body, intptr_t start, bool isTail) {
+void CGFunction::compileBody(const Handle &body, intptr_t start,
+                             bool isTail) {
   intptr_t len = Util::arrayLength(body);
   for (intptr_t i = start; i < len; ++i) {
     Handle x = Util::arrayAt(body, i);
@@ -247,8 +266,7 @@ void CGFunction::compileBody(const Handle &body, intptr_t start, bool isTail) {
     }
     else {
       compileExpr(x, false);
-      __ pop(rax);
-      shiftLocal(-1);
+      popSome(1);
     }
   }
 }
@@ -258,7 +276,7 @@ void CGFunction::compileExpr(const Handle &expr, bool isTail) {
 
   switch (expr->getTag()) {
   case RawObject::kFixnumTag:
-    emitConst(expr);
+    pushObject(expr);
     break;
 
   case RawObject::kSymbolTag:
@@ -267,8 +285,7 @@ void CGFunction::compileExpr(const Handle &expr, bool isTail) {
     if (ix != -1) {
       // Is local
       __ mov(rax, qword_ptr(rsp, ix * kPtrSize));
-      __ push(rax);
-      shiftLocal(1);
+      pushReg(rax, kIsPtr);
       break;
     }
     else {
@@ -277,14 +294,15 @@ void CGFunction::compileExpr(const Handle &expr, bool isTail) {
         dprintf(2, "lookupGlobal: %s not found\n", expr->rawSymbol());
         exit(1);
       }
-      __ mov(rax, parent->moduleGlobalVector->as<intptr_t>());
+      __ mov(rax, 0L);
       // References a ptr so need to do this
       recordLastPtrOffset();
+      recordReloc(parent->moduleGlobalVector);
+
       __ mov(rax, qword_ptr(rax,
             RawObject::kVectorElemOffset - RawObject::kVectorTag +
             kPtrSize * ix));
-      __ push(rax);
-      shiftLocal(1);
+      pushReg(rax, kIsPtr);
       break;
     }
 
@@ -295,13 +313,12 @@ void CGFunction::compileExpr(const Handle &expr, bool isTail) {
 
     // Check for define
     if (tryIf(xs, isTail)) {
-      break;
+    }
+    else if (tryBegin(xs, isTail)) {
     }
     else if (tryQuote(xs)) {
-      break;
     }
     else if (tryPrimOp(xs, isTail)) {
-      break;
     }
     else {
       // Should be funcall
@@ -312,7 +329,7 @@ void CGFunction::compileExpr(const Handle &expr, bool isTail) {
 
   case RawObject::kSingletonTag:
     if (expr->isTrue() || expr->isFalse()) {
-      emitConst(expr);
+      pushObject(expr);
     }
     else if (expr->isNil()) {
       assert(0 && "Unexpected nil in code");
@@ -328,12 +345,75 @@ void CGFunction::compileExpr(const Handle &expr, bool isTail) {
 }
 
 void CGFunction::compileCall(const Handle &xs, bool isTail) {
-  assert(false);
+  intptr_t argc = Util::arrayLength(xs) - 1;
+  assert(argc < 6);
+
+  for (intptr_t i = 0; i < argc + 1; ++i) {
+    // Evaluate func and args
+    compileExpr(Util::arrayAt(xs, i), false);
+  }
+
+  for (intptr_t i = argc; i >= 0; --i) {
+    // Reverse pop values to argument pos
+    popReg(kArgRegsWithClosure[i]);
+  }
+
+  // Check closure type
+  __ mov(rax, rdi);
+  __ and_(eax, 15);
+  __ cmp(rax, RawObject::kClosureTag);
+  auto labelNotAClosure = __ newLabel();
+  __ jne(labelNotAClosure);
+
+  // Check arg count
+  __ mov(rax, qword_ptr(rdi, -RawObject::kClosureTag));
+  __ mov(rax, qword_ptr(rax, RawObject::kFuncArityOffset));
+  __ cmp(rax, argc);
+  auto labelArgCountMismatch = __ newLabel();
+  __ jne(labelArgCountMismatch);
+
+  // Extract and call the code pointer
+  // XXX: how about stack overflow checking?
+  __ mov(rax, qword_ptr(rdi, -RawObject::kClosureTag));
+  __ lea(rax, qword_ptr(rax, RawObject::kFuncCodeOffset));
+
+  auto labelOk = __ newLabel();
+  if (!isTail) {
+    __ mov(kFrameDescrReg, makeFrameDescr());
+
+    // If doing normal call:
+    __ call(rax);
+
+    // After call
+    pushReg(rax, kIsPtr);
+    __ jmp(labelOk);
+  }
+  else {
+    popPhysicalFrame();
+    // Tail call
+    __ jmp(rax);
+
+    // To compensate for stack depth
+    pushVirtual(kIsPtr);
+  }
+
+  // Not a closure(%rdi = func)
+  __ bind(labelNotAClosure);
+  __ call(reinterpret_cast<void *>(&Runtime::handleNotAClosure));
+
+  // Wrong arg count(%rdi = func, %rsi = actual argc)
+  __ bind(labelArgCountMismatch);
+  __ mov(rsi, argc);
+  __ call(reinterpret_cast<void *>(&Runtime::handleArgCountMismatch));
+
+  if (!isTail) {
+    __ bind(labelOk);
+  }
 }
 
 bool CGFunction::tryIf(const Handle &xs, bool isTail) {
   intptr_t len = Util::arrayLength(xs);
-  if (len != 4 || !Util::arrayAt(xs, 0) == parent->symIf) {
+  if (len != 4 || !(Util::arrayAt(xs, 0) == parent->symIf)) {
     return false;
   }
 
@@ -342,17 +422,16 @@ bool CGFunction::tryIf(const Handle &xs, bool isTail) {
 
   // Pred
   compileExpr(Util::arrayAt(xs, 1));
-  __ pop(rax);
-  shiftLocal(-1);
+  popReg(rax);
 
   __ cmp(rax, Object::newFalse()->as<intptr_t>());
   __ je(labelFalse);
 
   compileExpr(Util::arrayAt(xs, 2), isTail);
   __ jmp(labelDone);
-
   // Since we need to balance out those two branches
-  shiftLocal(-1);
+  popVirtual(1);
+
   __ bind(labelFalse);
   compileExpr(Util::arrayAt(xs, 3), isTail);
 
@@ -366,7 +445,15 @@ bool CGFunction::tryQuote(const Handle &expr) {
       Util::arrayAt(expr, 0) != parent->symQuote) {
     return false;
   }
-  emitConst(Util::arrayAt(expr, 1));
+  pushObject(Util::arrayAt(expr, 1));
+  return true;
+}
+
+bool CGFunction::tryBegin(const Handle &expr, bool isTail) {
+  if (Util::arrayAt(expr, 0) != parent->symBegin) {
+    return false;
+  }
+  compileBody(expr, 1, isTail);
   return true;
 }
 
@@ -383,8 +470,7 @@ bool CGFunction::tryPrimOp(const Handle &xs, bool isTail) {
   if (opName == parent->symPrimAdd && len == 3) {
     compileExpr(Util::arrayAt(xs, 1));
     compileExpr(Util::arrayAt(xs, 2));
-    __ pop(rax);
-    shiftLocal(-1);
+    popReg(rax);
     __ add(rax, qword_ptr(rsp));
     __ sub(rax, RawObject::kFixnumTag);
     __ mov(qword_ptr(rsp), rax);
@@ -395,25 +481,75 @@ bool CGFunction::tryPrimOp(const Handle &xs, bool isTail) {
     __ mov(rax, qword_ptr(rsp, kPtrSize));
     __ sub(rax, qword_ptr(rsp));
     __ add(rax, RawObject::kFixnumTag);
-    __ add(rsp, kPtrSize);
-    shiftLocal(-1);
+    popSome(1);
     __ mov(qword_ptr(rsp), rax);
   }
   else if (opName == parent->symPrimLt && len == 3) {
     compileExpr(Util::arrayAt(xs, 1));
     compileExpr(Util::arrayAt(xs, 2));
-    __ pop(rax);
-    shiftLocal(-1);
+    popReg(rax);
     __ cmp(rax, qword_ptr(rsp));
     __ mov(rcx, Object::newTrue()->as<intptr_t>());
     __ mov(rax, Object::newFalse()->as<intptr_t>());
     __ cmovg(rax, rcx);
     __ mov(qword_ptr(rsp), rax);
   }
+  else if (opName == parent->symPrimCons && len == 3) {
+    // (cons# 1 2)
+    size_t hSize = sizeof(GcHeader);
+    size_t rawAllocSize = RawObject::kSizeOfPair + hSize;
+    assert(Util::aligned<4>(rawAllocSize));
+    compileExpr(Util::arrayAt(xs, 1));
+    compileExpr(Util::arrayAt(xs, 2));
+
+    auto labelRetry = __ newLabel();
+    __ bind(labelRetry);
+
+    __ lea(rcx, qword_ptr(kHeapPtr, rawAllocSize));
+    __ cmp(rcx, kHeapLimit);
+    auto labelAlloc = __ newLabel();
+    __ jle(labelAlloc);
+
+    {
+      // Call runtime gc
+      __ mov(rdi, RawObject::kSizeOfPair);
+      __ mov(rsi, rsp);
+      __ mov(rdx, makeFrameDescr());
+      __ mov(rcx, kThreadState);
+      __ call(reinterpret_cast<intptr_t>(&Runtime::collectAndAlloc));
+      // Extract new heapPtr and limitPtr
+      __ mov(kHeapPtr,
+          qword_ptr(kThreadState, kPtrSize * ThreadState::kHeapPtrOffset));
+      __ mov(kHeapLimit,
+          qword_ptr(kThreadState, kPtrSize * ThreadState::kHeapLimitOffset));
+      // And retry
+      __ jmp(labelRetry);
+    }
+
+    __ bind(labelAlloc);
+
+    // Alloc done, initializing..
+    // Init gc header. @See gc.hpp's initGcHeader
+    __ mov(qword_ptr(kHeapPtr, 8), GcHeader::fromRuntimeAlloc(rawAllocSize));
+
+    // Put cdr
+    popReg(rax);
+    __ mov(qword_ptr(kHeapPtr, hSize + RawObject::kCdrOffset), rax);
+
+    // Put car
+    popReg(rax);
+    __ mov(qword_ptr(kHeapPtr, hSize + RawObject::kCarOffset), rax);
+
+    // GcHeader padding and tag
+    __ add(kHeapPtr, hSize + RawObject::kPairTag);
+    pushReg(kHeapPtr, kIsPtr);
+
+    // Write new heapPtr back
+    __ mov(kHeapPtr, rcx);
+  }
   else if (opName == parent->symPrimTrace && len == 3) {
     compileExpr(Util::arrayAt(xs, 1));
-    __ pop(rdi);
-    shiftLocal(-1);
+    popReg(rdi);
     __ call(reinterpret_cast<intptr_t>(&Runtime::traceObject));
     compileExpr(Util::arrayAt(xs, 2), isTail);
   }
@@ -433,14 +569,16 @@ void CGFunction::shiftLocal(intptr_t n) {
   });
 }
 
-void CGFunction::emitConst(const Handle &expr) {
-  __ mov(rax, expr->as<intptr_t>());
-  __ push(rax);
-  shiftLocal(1);
+intptr_t CGFunction::getThisClosure() {
+  return (frameSize - 2) * kPtrSize;
+}
 
-  if (expr->isHeapAllocated()) {
-    recordLastPtrOffset();
-  }
+intptr_t CGFunction::getFrameDescr() {
+  return (frameSize - 1) * kPtrSize;
+}
+
+void CGFunction::recordReloc(const Handle &e) {
+  Util::arrayAppend(relocArray, e);
 }
 
 void CGFunction::recordLastPtrOffset() {
@@ -449,5 +587,87 @@ void CGFunction::recordLastPtrOffset() {
   assert(size == 8);
   Util::arrayAppend(ptrOffsets,
       Object::newFixnum(offset - RawObject::kFuncCodeOffset));
+}
+
+void CGFunction::pushObject(const Handle &x) {
+  if (x->isHeapAllocated()) {
+    // To be patched later. See @Invariant
+    __ mov(rax, 0L);
+    recordReloc(x);
+    recordLastPtrOffset();
+  }
+  else {
+    __ mov(rax, x->as<intptr_t>());
+  }
+  __ push(rax);
+  pushVirtual(kIsPtr);
+}
+
+void CGFunction::pushInt(intptr_t i) {
+  __ mov(rax, i);
+  __ push(rax);
+  pushVirtual(kIsNotPtr);
+}
+
+void CGFunction::pushReg(const GpReg &r, IsPtr isPtr) {
+  __ push(r);
+  pushVirtual(isPtr);
+}
+
+void CGFunction::pushVirtual(IsPtr isPtr) {
+  shiftLocal(1);
+  stackItemList = Object::newPair(Object::newBool(isPtr == kIsPtr),
+                                  stackItemList);
+  ++frameSize;
+  //dprintf(2, "[pushV] += 1, frameSize = %ld\n", frameSize);
+}
+
+void CGFunction::popSome(intptr_t n) {
+  __ add(rsp, kPtrSize * n);
+  popVirtual(n);
+}
+
+void CGFunction::popFrame() {
+  popSome(frameSize);
+}
+
+void CGFunction::popPhysicalFrame() {
+  __ add(rsp, kPtrSize * frameSize);
+}
+
+void CGFunction::popReg(const GpReg &r) {
+  __ pop(r);
+  popVirtual(1);
+}
+
+void CGFunction::popVirtual(intptr_t n) {
+  shiftLocal(-n);
+  for (intptr_t i = 0; i < n; ++i) {
+    stackItemList = stackItemList->raw()->cdr();
+  }
+  frameSize -= n;
+  //dprintf(2, "[popV] -= %ld, frameSize = %ld\n", n, frameSize);
+}
+
+intptr_t CGFunction::makeFrameDescr() {
+  FrameDescr fd;
+  // Current max fd size.
+  assert(frameSize <= 48);
+  fd.frameSize = frameSize;
+  Handle stackIter = stackItemList;
+  for (intptr_t i = 0; i < frameSize; ++i) {
+    assert(stackIter->isPair());
+    if (stackIter->raw()->car()->isTrue()) {
+      //dprintf(2, "[mkFd %s] %ld is ptr\n", name->rawSymbol(), i);
+      fd.setIsPtr(i);
+    }
+    else {
+      //dprintf(2, "[mkFd %s] %ld is not ptr\n", name->rawSymbol(), i);
+      assert(!fd.isPtr(i));
+    }
+    stackIter = stackIter->raw()->cdr();
+  }
+  //dprintf(2, "[mkFd %s] fd = %ld\n", name->rawSymbol(), fd.pack());
+  return fd.pack();
 }
 

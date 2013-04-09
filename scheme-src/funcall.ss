@@ -1,6 +1,6 @@
 (define main
   (lambda ()
-    (add (add 1 2) 3)))
+    (add 1 2)))
 
 (define add
   (lambda (x y)

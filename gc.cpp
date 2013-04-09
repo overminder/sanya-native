@@ -6,6 +6,13 @@
 #define KB 1024
 #define MB (KB * KB)
 
+intptr_t GcHeader::fromRuntimeAlloc(size_t size) {
+  GcHeader h;
+  h.setMarkAt<kCopied, false>();
+  h.size = size;
+  return *reinterpret_cast<intptr_t *>(&h);
+}
+
 ThreadState *ThreadState::global_ = NULL;
 
 ThreadState *ThreadState::create() {
@@ -13,12 +20,12 @@ ThreadState *ThreadState::create() {
   ThreadState *ts = reinterpret_cast<ThreadState *>(raw);
 
   // Mocking compiled code info
-  ts->lastFrameDescr() = NULL;
+  ts->lastFrameDescr() = FrameDescr();
   ts->firstStackPtr()  = 0;
   ts->lastStackPtr()   = 0;
 
   // Init gc
-  ts->heapSize()      = 256 * KB;
+  ts->heapSize()      = 7 * KB;
   ts->heapBase()      = reinterpret_cast<intptr_t>(malloc(ts->heapSize() * 2));
   ts->heapPtr()       = ts->heapBase();
   ts->heapLimit()     = ts->heapBase() + ts->heapSize();
@@ -42,10 +49,21 @@ void ThreadState::initGlobalState() {
   global_->symbolInternTable() = Util::newAssocList();
 }
 
+void *ThreadState::initGcHeader(intptr_t raw, size_t size) {
+  GcHeader *h = reinterpret_cast<GcHeader *>(raw);
+  h->setMarkAt<GcHeader::kCopied, false>();
+  h->size = size;
+  return reinterpret_cast<void *>(h->toRawObject());
+}
+
 void ThreadState::destroy() {
   free(handleHead());
   free(reinterpret_cast<void *>(heapBase()));
   free(this);
+}
+
+void ThreadState::display(int fd) {
+  dprintf(fd, "[ThreadState] Hp = %ld, HpLim = %ld\n", heapPtr(), heapLimit());
 }
 
 void *ThreadState::gcAllocSlow(size_t size) {
@@ -109,6 +127,8 @@ void ThreadState::gcCollect() {
     gcScavenge(&iter->ptr);
   }
 
+  gcScavengeSchemeStack();
+
   // Scavenge symbol intern table
   gcScavenge(&symbolInternTable());
 
@@ -118,8 +138,39 @@ void ThreadState::gcCollect() {
   heapPtr()         = heapCopyPtr();
   heapLimit()       = heapFromSpace() + heapSize();
 
+  dprintf(2, "[gcCollect] (%ld/%ld)\n",
+              heapSize() - (heapLimit() - heapPtr()),
+              heapSize());
+
   if (heapLimit() - heapPtr() < (intptr_t) lastAllocReq()) {
     dprintf(2, "gcCollect: heap exhausted by req %ld\n", lastAllocReq());
+  }
+}
+
+// @See Runtime::collectAndAlloc
+void ThreadState::gcScavengeSchemeStack() {
+  FrameDescr fd = lastFrameDescr();
+  intptr_t stackPtr = lastStackPtr();
+  intptr_t stackTop = firstStackPtr();
+
+  if (stackPtr == stackTop) {
+    return;
+  }
+
+  while (true) {
+    for (intptr_t i = 0; i < fd.frameSize; ++i) {
+      if (fd.isPtr(i)) {
+        Object **loc = reinterpret_cast<Object **>(stackPtr + i * 8);
+        gcScavenge(loc);
+      }
+    }
+
+    stackPtr += (1 + fd.frameSize) * 8;
+    if (stackPtr == stackTop) {
+      break;
+    }
+    assert(stackPtr < stackTop);
+    fd = *reinterpret_cast<FrameDescr *>(stackPtr - 16);
   }
 }
 

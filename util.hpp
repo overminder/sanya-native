@@ -22,7 +22,7 @@ intptr_t align(intptr_t orig) {
 }
 
 void logObj(const char *wat, Object *x, int fd = 2);
-void logPtr(const char *wat, Object *x, int fd = 2);
+void logPtr(const char *wat, void *x, int fd = 2);
 
 template<int Bits>
 bool isAligned(intptr_t orig) {

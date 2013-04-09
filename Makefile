@@ -1,10 +1,11 @@
-CXXFLAGS += $(INCLUDE) -std=c++0x -Wno-pmf-conversions -O0 -g -Wall
+CXXFLAGS += $(INCLUDE) -std=c++0x -Wno-pmf-conversions -O3 -g -Wall
+CXXFLAGS += -fno-strict-aliasing
 
 LDFLAGS += -lasmjit -L/usr/local/lib -g
 
 INCLUDE += -I "/home/overmind/ref/binutil/asmjit-read-only/asmjit/src"
 
-OBJECTS = main.o parser.o object.o runtime.o gc.o util.o codegen2.o
+OBJECTS = main.o parser.o object.o runtime.o gc.o util.o codegen2.o asmentry.o
 
 HEADERS = object.hpp parser.hpp runtime.hpp util.hpp gc.hpp codegen2.hpp
 

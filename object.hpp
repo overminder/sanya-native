@@ -39,6 +39,7 @@ class RawObject : public Base<RawObject> {
   enum {
     kTagShift                   = 0x4,
 
+    kSizeOfPair                 = 0x10,
     kCarOffset                  = 0x0,
     kCdrOffset                  = 0x8,
 
@@ -129,7 +130,7 @@ TAG_LIST(MK_TAG_AS)
 class Object : public Base<Object> {
  public:
   static Object *newPair(const Handle &car, const Handle &cdr) {
-    RawObject *pair = alloc<RawObject>(16);
+    RawObject *pair = alloc<RawObject>(RawObject::kSizeOfPair);
     pair->car() = car.getPtr();
     pair->cdr() = cdr.getPtr();
     //dprintf(2, "[Object::newPair] %p\n", pair);
@@ -183,6 +184,10 @@ SINGLETONS(MK_SINGLETON)
   bool is ## name() { return this == new ## name(); }
 SINGLETONS(CHECK_SINGLETON)
 #undef SINGLETONS
+
+  static Object *newBool(bool wat) {
+    return wat ? newTrue() : newFalse();
+  }
 
   static RawObject *newFunction(void *raw, intptr_t arity,
                                 Object *name, Object *constOffsets,

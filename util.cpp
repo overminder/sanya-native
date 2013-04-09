@@ -3,7 +3,7 @@
 
 namespace Util {
 
-void logPtr(const char *wat, Object *x, int fd) {
+void logPtr(const char *wat, void *x, int fd) {
   dprintf(fd, "[%s] %p\n", wat, x);
 }
 

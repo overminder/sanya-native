@@ -7,23 +7,17 @@
 #include "codegen2.hpp"
 #include "runtime.hpp"
 
-typedef Object *(SchemeFn_0)(Object *);
-typedef Object *(SchemeFn_1)(Object *, Object *);
+extern "C" {
+  extern Object *Scheme_asmEntry(Object *, void *, intptr_t, intptr_t, ThreadState *);
+}
 
 Object *callScheme_0(Object *clo) {
   assert(clo->isClosure());
   auto info = clo->raw()->cloInfo();
   assert(info->funcArity() == 0);
-  auto entry = info->funcCodeAs<SchemeFn_0 *>();
-  return entry(clo);
-}
-
-Object *callScheme_1(Object *clo, Object *arg1) {
-  assert(clo->isClosure());
-  auto info = clo->raw()->cloInfo();
-  assert(info->funcArity() == 1);
-  auto entry = info->funcCodeAs<SchemeFn_1 *>();
-  return entry(clo, arg1);
+  auto entry = info->funcCodeAs<void *>();
+  ThreadState *ts = &ThreadState::global();
+  return Scheme_asmEntry(clo, entry, ts->heapPtr(), ts->heapLimit(), ts);
 }
 
 void readAll(FILE *f, std::string *xs) {
@@ -34,42 +28,49 @@ void readAll(FILE *f, std::string *xs) {
   }
 }
 
-void gcMain(int argc, char **argv) {
+Object *getMainClo(int argc, char **argv) {
   FILE *fin;
   CGModule cg;
-  std::string input;
+  Handle ast;
 
-  if (argc == 2) {
-    fin = fopen(argv[1], "r");
-    if (!fin) {
-      perror(argv[1]);
-      exit(1);
+  {
+    std::string input;
+
+    if (argc == 2) {
+      fin = fopen(argv[1], "r");
+      if (!fin) {
+        perror(argv[1]);
+        exit(1);
+      }
     }
-  }
-  else {
-    fin = stdin;
-  }
-  readAll(fin, &input);
-  if (fin != stdin) {
-    fclose(fin);
-  }
+    else {
+      fin = stdin;
+    }
+    readAll(fin, &input);
+    if (fin != stdin) {
+      fclose(fin);
+    }
 
-  Parser parser(input);
+    Parser parser(input);
 
-  bool parseOk;
-  Handle ast = parser.parseProg(&parseOk);
-  assert(parseOk);
+    bool parseOk;
+    ast = parser.parseProg(&parseOk);
+    assert(parseOk);
+  }
 
   //ast->displayDetail(2);
 
   Object *mainClo = cg.genModule(ast);
+  return mainClo;
+  //ThreadState::global().display(2);
 
-  callScheme_0(mainClo)->displayDetail(1);
-  Runtime::printNewLine(1);
+  //callScheme_0(mainClo)->displayDetail(1);
+  //Runtime::printNewLine(1);
 }
 
 int main(int argc, char **argv) {
-  gcMain(argc, argv);
+  //ThreadState::global().display(2);
+  callScheme_0(getMainClo(argc, argv));
   ThreadState::global().destroy();
   return 0;
 }

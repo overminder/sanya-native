@@ -53,4 +53,10 @@ S2S (Scheme to scheme) calling convention
   [test and extract codeptr to %rax]
   jmp %rax
 
+### Runtime GC call
+  mov allocSize, %rdi
+  mov %rsp, %rsi
+  mov frameDescr, %rdx
+  mov threadState, %rcx
+  call collectAndAlloc
 
