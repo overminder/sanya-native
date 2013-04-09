@@ -74,14 +74,27 @@ void Object::displayDetail(int fd) {
     break;
 
   case RawObject::kClosureTag:
-    dprintf(fd, "<Closure ");
-    raw->cloInfo()->funcName()->displayDetail(fd);
-    dprintf(fd, ">");
+    if (raw->cloInfo()) {
+      dprintf(fd, "<Closure ");
+      raw->cloInfo()->funcName()->displayDetail(fd);
+      dprintf(fd, ">");
+    }
+    else {
+      // info table is null during compilation
+      dprintf(fd, "<Semi-Closure %p>", raw);
+    }
     break;
 
   case RawObject::kVectorTag:
-    dprintf(fd, "<Vector %p>", raw);
+  {
+    dprintf(fd, "(#");
+    for (intptr_t i = 0, len = raw->vectorSize(); i < len; ++i) {
+      dprintf(fd, " ");
+      raw->vectorAt(i)->displayDetail(fd);
+    }
+    dprintf(fd, ")");
     break;
+  }
 
   default:
     dprintf(fd, "<Unknown-ptr %p>", this);
@@ -121,13 +134,30 @@ void Object::gcScavenge(ThreadState *ts) {
 
     case RawObject::kClosureTag:
     {
-      RawObject *info  = raw()->cloInfo();
+      RawObject *info = raw()->cloInfo();
+      if (!info) {
+        // info is NULL? happens when a supercombinator
+        // is just created in the codegen.
+        break;
+      }
       Object **payload = raw()->cloPayload();
       for (intptr_t i = 0; i < info->funcNumPayload(); ++i) {
         ts->gcScavenge(payload + i);
       }
       ts->gcScavenge(&info->funcName());
-      ts->gcScavenge(&info->funcReloc());
+      ts->gcScavenge(&info->funcConstOffset());
+
+      // Scavenge const ptrs in code
+      // @See codegen2.cpp
+      //Util::logObj("scavenge code", info->funcConstOffset());
+      intptr_t len = info->funcConstOffset()->raw()->vectorSize();
+      for (intptr_t i = 0; i < len; ++i) {
+        intptr_t offset = info->funcConstOffset()->
+                          raw()->vectorAt(i)->fromFixnum();
+        intptr_t ptrLoc = info->funcCodeAs<intptr_t>() + offset;
+        //Util::logObj("scavenge const", *(Object **) ptrLoc);
+        ts->gcScavenge(reinterpret_cast<Object **>(ptrLoc));
+      }
       break;
     }
     case RawObject::kVectorTag:

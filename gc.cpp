@@ -1,5 +1,7 @@
 #include "gc.hpp"
 #include "object.hpp"
+#include "util.hpp"
+#include "runtime.hpp"
 
 #define KB 1024
 #define MB (KB * KB)
@@ -27,7 +29,17 @@ ThreadState *ThreadState::create() {
   ts->handleHead() = reinterpret_cast<Handle *>(malloc(sizeof(Handle)));
   ts->handleHead()->initFromThreadState(ts);
 
+  // There's only one intern table
+  ts->symbolInternTable() = NULL;
+
   return ts;
+}
+
+void ThreadState::initGlobalState() {
+  global_ = ThreadState::create();
+
+  // Create global symbol intern table
+  global_->symbolInternTable() = Util::newAssocList();
 }
 
 void ThreadState::destroy() {
@@ -66,9 +78,9 @@ void ThreadState::gcScavenge(Object **loc) {
     return;
   }
 
-  dprintf(2, "[GC] Scavenge %p: ", ptr->raw());
-  ptr->displayDetail(2);
-  dprintf(2, "\n");
+  //dprintf(2, "[GC] Scavenge %p: ", ptr->raw());
+  //ptr->displayDetail(2);
+  //dprintf(2, "\n");
 
   h->setMarkAt<GcHeader::kCopied, true>();
 
@@ -86,15 +98,19 @@ void ThreadState::gcScavenge(Object **loc) {
 }
 
 void ThreadState::gcCollect() {
-  dprintf(2, "[GC] Collect\n");
+  //dprintf(2, "[GC] Collect\n");
 
   // Invariant: we are using simple semispace gc
   heapCopyPtr() = heapToSpace();
 
+  // Scavenge C++ roots
   for (Handle *iter = handleHead()->next;
        iter != handleHead(); iter = iter->next) {
     gcScavenge(&iter->ptr);
   }
+
+  // Scavenge symbol intern table
+  gcScavenge(&symbolInternTable());
 
   intptr_t tmpSpace = heapFromSpace();
   heapFromSpace()   = heapToSpace();

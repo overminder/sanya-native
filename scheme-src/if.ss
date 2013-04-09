@@ -1,3 +1,3 @@
 (define main
   (lambda ()
-    (if #f 1 2)))
+    (if #t (trace# 1 1) (trace# 2 2))))

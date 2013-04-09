@@ -32,7 +32,8 @@ class RawObject : public Base<RawObject> {
     kSingletonTag               = 0x3,
     kFixnumTag                  = 0x4,
     kClosureTag                 = 0x5,
-    kVectorTag                  = 0x6
+    kVectorTag                  = 0x6,
+    kForeignPtrTag              = 0x7
   };
 
   enum {
@@ -47,7 +48,7 @@ class RawObject : public Base<RawObject> {
 
     kFuncArityOffset            = 0x0,
     kFuncNameOffset             = 0x8,
-    kFuncRelocOffset            = 0x10,
+    kFuncConstOffsetOffset      = 0x10,
     kFuncNumPayloadOffset       = 0x18,
     kFuncCodeOffset             = 0x20, // variable-sized
 
@@ -81,7 +82,7 @@ class RawObject : public Base<RawObject> {
   Object *tagAs ## name() { return tag<k ## name ## Tag>();  }
 
 #define TAG_LIST(V) \
-  V(Pair) V(Symbol) V(Fixnum) V(Singleton) V(Closure) V(Vector)
+  V(Pair) V(Symbol) V(Fixnum) V(Singleton) V(Closure) V(Vector) V(ForeignPtr)
 TAG_LIST(MK_TAG_AS)
 #undef MK_TAG_AS
 
@@ -93,7 +94,7 @@ TAG_LIST(MK_TAG_AS)
   V(cdr,            kCdr,            Object *)                  \
   V(funcArity,      kFuncArity,      intptr_t)                  \
   V(funcName,       kFuncName,       Object *)                  \
-  V(funcReloc,      kFuncReloc,      Object *)                  \
+  V(funcConstOffset,      kFuncConstOffset,      Object *)                  \
   V(funcCode,       kFuncCode,       char)                      \
   V(funcNumPayload, kFuncNumPayload, intptr_t)                  \
   V(vectorSize,     kVectorSize,     intptr_t)                  \
@@ -131,13 +132,33 @@ class Object : public Base<Object> {
     RawObject *pair = alloc<RawObject>(16);
     pair->car() = car.getPtr();
     pair->cdr() = cdr.getPtr();
-    dprintf(2, "[Object::newPair] %p\n", pair);
+    //dprintf(2, "[Object::newPair] %p\n", pair);
     return pair->tagAsPair();
   }
 
   static Object *newFixnum(intptr_t val) {
     RawObject *raw = RawObject::from(val << RawObject::kTagShift);
     return raw->tagAsFixnum();
+  }
+
+  static Object *internSymbol(const char *src) {
+    Handle tmp = newSymbolFromC(src);
+    bool ok;
+    Object *got = Util::assocLookupKey(
+        ThreadState::global().symbolInternTable(),
+        tmp, Util::kSymbolEq, &ok);
+    if (ok) {
+      return got;
+    }
+    else {
+      //ThreadState::global().symbolInternTable() = 
+
+      Object *newInternTable =
+        Util::assocInsert(ThreadState::global().symbolInternTable(),
+            tmp, Object::newNil(), Util::kPtrEq);
+      ThreadState::global().symbolInternTable() = newInternTable;
+      return tmp.getPtr();
+    }
   }
 
   static Object *newSymbolFromC(const char *src) {
@@ -164,13 +185,13 @@ SINGLETONS(CHECK_SINGLETON)
 #undef SINGLETONS
 
   static RawObject *newFunction(void *raw, intptr_t arity,
-                                Object *name, Object *reloc,
+                                Object *name, Object *constOffsets,
                                 intptr_t numPayload) {
     // keep in sync with the codegen.
     RawObject *func = RawObject::from(raw);
     func->funcArity() = arity;
     func->funcName() = name;
-    func->funcReloc() = reloc;
+    func->funcConstOffset() = constOffsets;
     func->funcNumPayload() = numPayload;
     return func;
   }
@@ -185,6 +206,8 @@ SINGLETONS(CHECK_SINGLETON)
       // No info, should be a supercombinator
       size = sizeof(Object *);
     }
+
+    size = Util::align<4>(size);
    
     RawObject *clo = alloc<RawObject>(size);
     clo->cloInfo() = info;
@@ -192,7 +215,8 @@ SINGLETONS(CHECK_SINGLETON)
   }
 
   static Object *newVector(intptr_t size, Object *fill) {
-    RawObject *vector = alloc<RawObject>(sizeof(Object *) * (1 + size));
+    size_t actualSize = Util::align<4>(sizeof(Object *) * (1 + size));
+    RawObject *vector = alloc<RawObject>(actualSize);
     vector->vectorSize() = size;
     for (intptr_t i = 0; i < size; ++i) {
       vector->vectorAt(i) = fill;
@@ -200,10 +224,21 @@ SINGLETONS(CHECK_SINGLETON)
     return vector->tagAsVector();
   }
 
+  // Not allocated from the scheme heap
+  template <typename T>
+  static Object *newForeignPtr(T *wat) {
+    return RawObject::from(wat)->tagAsForeignPtr();
+  }
+
 #define CHECK_TAG(name) \
   bool is ## name() { return getTag() == RawObject::k ## name ## Tag; }
   TAG_LIST(CHECK_TAG)
 #undef CHECK_TAG
+
+  // Does not check for proper list.
+  bool isList() {
+    return isPair() || isNil();
+  }
 
   template <typename T>
   static T *alloc(size_t size) {
@@ -225,7 +260,8 @@ SINGLETONS(CHECK_SINGLETON)
       return true;
 
     default:
-      assert(0 && "Object::isHeapAllocated: not a tagged object");
+      Util::logPtr("Object::isHeapAllocated: not a tagged object", this);
+      assert(0);
     }
   }
 

@@ -4,7 +4,7 @@
 
 #include "object.hpp"
 #include "parser.hpp"
-//#include "codegen.hpp"
+#include "codegen2.hpp"
 #include "runtime.hpp"
 
 typedef Object *(SchemeFn_0)(Object *);
@@ -36,7 +36,7 @@ void readAll(FILE *f, std::string *xs) {
 
 void gcMain(int argc, char **argv) {
   FILE *fin;
-  //CGModule cg;
+  CGModule cg;
   std::string input;
 
   if (argc == 2) {
@@ -60,12 +60,12 @@ void gcMain(int argc, char **argv) {
   Handle ast = parser.parseProg(&parseOk);
   assert(parseOk);
 
-  ast->displayDetail(2);
+  //ast->displayDetail(2);
 
-  //Object *mainClo = cg.genModule(ast);
+  Object *mainClo = cg.genModule(ast);
 
-  //callScheme_0(mainClo)->displayDetail(1);
-  //Runtime::printNewLine(1);
+  callScheme_0(mainClo)->displayDetail(1);
+  Runtime::printNewLine(1);
 }
 
 int main(int argc, char **argv) {

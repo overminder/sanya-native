@@ -74,6 +74,7 @@ class ThreadState {
     kHeapCopyPtrOffset,
     kLastAllocReqOffset,
     kHandleHeadOffset,
+    kSymbolInternTableOffset,
     kLastOffset
   };
 
@@ -110,10 +111,12 @@ class ThreadState {
 
   static ThreadState &global() {
     if (!global_) {
-      global_ = ThreadState::create();
+      initGlobalState();
     }
     return *global_;
   }
+
+  static void initGlobalState();
 
   static ThreadState *create();
   void destroy();
@@ -144,6 +147,7 @@ class ThreadState {
   V(heapCopyPtr,               kHeapCopyPtr,               intptr_t)          \
   V(lastAllocReq,              kLastAllocReq,              size_t)            \
   V(handleHead,                kHandleHead,                Handle *)          \
+  V(symbolInternTable,         kSymbolInternTable,         Object *)          \
   // Append
 
   ATTR_LIST(MK_ATTR);
@@ -162,6 +166,10 @@ struct FrameDescr {
 // Used by C++-compiled code (but not by native code) to handle gc.
 class Handle {
  public:
+  Handle() {
+    initPtr(NULL);
+  }
+
   Handle(Object *ptr) {
     initPtr(ptr);
   }
@@ -173,6 +181,14 @@ class Handle {
   Handle &operator=(const Handle &other) {
     ptr = other.ptr;
     return *this;
+  }
+
+  bool operator==(const Handle &other) const {
+    return ptr == other.ptr;
+  }
+
+  bool operator==(const Object *other) const {
+    return ptr == other;
   }
 
   ~Handle() {
@@ -189,6 +205,14 @@ class Handle {
     return ptr;
   }
 
+  operator bool() const {
+    return ptr != NULL;
+  }
+
+  operator Object *() const {
+    return ptr;
+  }
+
   void initPtr(Object *ptr) {
     Handle *&head = ThreadState::global().handleHead();
     this->ptr = ptr;
@@ -202,7 +226,6 @@ class Handle {
   }
 
  private:
-  Handle();
 
   void initFromThreadState(ThreadState *ts) {
     ptr = NULL;

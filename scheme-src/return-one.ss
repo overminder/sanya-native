@@ -1,6 +1,6 @@
 (define main
   (lambda ()
-    (main)))
+    main))
 
 (define foo
   (lambda () 1))

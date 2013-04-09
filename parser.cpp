@@ -134,6 +134,6 @@ Object *Parser::parseAtom(char open) {
     }
     xs << c;
   }
-  return Object::newSymbolFromC(xs.str().c_str());
+  return Object::internSymbol(xs.str().c_str());
 }
 
