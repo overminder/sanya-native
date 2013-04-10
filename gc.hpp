@@ -21,8 +21,6 @@ class GcHeader {
     kCopied
   };
 
-  static intptr_t fromRuntimeAlloc(size_t size);
-
   static GcHeader *fromRawObject(RawObject *wat) {
     return reinterpret_cast<GcHeader *>(
         reinterpret_cast<intptr_t>(wat) - sizeof(GcHeader));
@@ -111,7 +109,10 @@ class ThreadState {
     intptr_t res = heapPtr();
     size += sizeof(GcHeader);
     heapPtr() += size;
-    if (//0 &&
+    if (
+#ifdef kSanyaGCDebug
+//        0 &&
+#endif
         heapPtr() <= heapLimit()) {
       return initGcHeader(res, size);
     }

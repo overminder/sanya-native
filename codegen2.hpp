@@ -93,6 +93,11 @@ class CGFunction {
   void recordLastPtrOffset();
   intptr_t makeFrameDescr();
 
+  // Alloc related
+
+  // Assume car and cdr are pushed
+  void allocPair();
+
   // Also records virtual frame
   void pushObject(const Handle &);
   void pushInt(intptr_t);

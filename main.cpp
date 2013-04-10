@@ -2,13 +2,15 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include "util.hpp"
 #include "object.hpp"
 #include "parser.hpp"
 #include "codegen2.hpp"
 #include "runtime.hpp"
 
 extern "C" {
-  extern Object *Scheme_asmEntry(Object *, void *, intptr_t, intptr_t, ThreadState *);
+  extern Object *Scheme_asmEntry(
+      Object *, void *, intptr_t, intptr_t, ThreadState *);
 }
 
 Object *callScheme_0(Object *clo) {
@@ -17,6 +19,7 @@ Object *callScheme_0(Object *clo) {
   assert(info->funcArity() == 0);
   auto entry = info->funcCodeAs<void *>();
   ThreadState *ts = &ThreadState::global();
+  Util::logObj("CallScheme", clo);
   return Scheme_asmEntry(clo, entry, ts->heapPtr(), ts->heapLimit(), ts);
 }
 

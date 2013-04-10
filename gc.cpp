@@ -6,13 +6,6 @@
 #define KB 1024
 #define MB (KB * KB)
 
-intptr_t GcHeader::fromRuntimeAlloc(size_t size) {
-  GcHeader h;
-  h.setMarkAt<kCopied, false>();
-  h.size = size;
-  return *reinterpret_cast<intptr_t *>(&h);
-}
-
 ThreadState *ThreadState::global_ = NULL;
 
 ThreadState *ThreadState::create() {
@@ -26,11 +19,18 @@ ThreadState *ThreadState::create() {
 
   // Init gc
   ts->heapSize()      = 7 * KB;
-  ts->heapBase()      = reinterpret_cast<intptr_t>(malloc(ts->heapSize() * 2));
+#ifndef kSanyaGCDebug
+  ts->heapBase()      = (intptr_t) malloc(ts->heapSize() * 2);
   ts->heapPtr()       = ts->heapBase();
   ts->heapLimit()     = ts->heapBase() + ts->heapSize();
   ts->heapFromSpace() = ts->heapBase();
   ts->heapToSpace()   = ts->heapBase() + ts->heapSize();
+#else
+  ts->heapBase()      = (intptr_t) malloc(ts->heapSize());
+  ts->heapPtr()       = ts->heapBase();
+  ts->heapLimit()     = ts->heapBase() + ts->heapSize();
+  ts->heapFromSpace() = ts->heapBase();
+#endif
 
   // Create linkedlist head
   ts->handleHead() = reinterpret_cast<Handle *>(malloc(sizeof(Handle)));
@@ -51,8 +51,10 @@ void ThreadState::initGlobalState() {
 
 void *ThreadState::initGcHeader(intptr_t raw, size_t size) {
   GcHeader *h = reinterpret_cast<GcHeader *>(raw);
+  h->mark = 0;
   h->setMarkAt<GcHeader::kCopied, false>();
   h->size = size;
+  h->copiedTo = NULL;
   return reinterpret_cast<void *>(h->toRawObject());
 }
 
@@ -119,7 +121,12 @@ void ThreadState::gcCollect() {
   //dprintf(2, "[GC] Collect\n");
 
   // Invariant: we are using simple semispace gc
+#ifndef kSanyaGCDebug
   heapCopyPtr() = heapToSpace();
+#else
+  heapToSpace() = (intptr_t) malloc(heapSize());
+  heapCopyPtr() = heapToSpace();
+#endif
 
   // Scavenge C++ roots
   for (Handle *iter = handleHead()->next;
@@ -132,9 +139,14 @@ void ThreadState::gcCollect() {
   // Scavenge symbol intern table
   gcScavenge(&symbolInternTable());
 
+#ifndef kSanyaGCDebug
   intptr_t tmpSpace = heapFromSpace();
   heapFromSpace()   = heapToSpace();
   heapToSpace()     = tmpSpace;
+#else
+  free((void *) heapBase());
+  heapBase() = heapFromSpace() = heapToSpace();
+#endif
   heapPtr()         = heapCopyPtr();
   heapLimit()       = heapFromSpace() + heapSize();
 
@@ -161,7 +173,16 @@ void ThreadState::gcScavengeSchemeStack() {
     for (intptr_t i = 0; i < fd.frameSize; ++i) {
       if (fd.isPtr(i)) {
         Object **loc = reinterpret_cast<Object **>(stackPtr + i * 8);
+        //Util::logObj("ScavengeScm Before", *loc);
+
+        //if ((*loc)->isHeapAllocated()) {
+        //  GcHeader *h = GcHeader::fromRawObject((*loc)->raw());
+        //  dprintf(2, "[GcHeader] size = %d, copied = %d\n",
+        //          h->size, h->markAt<GcHeader::kCopied>());
+        //}
+
         gcScavenge(loc);
+        //Util::logObj("ScavengeScm After", *loc);
       }
     }
 

@@ -1,5 +1,6 @@
 #include "object.hpp"
 #include "gc.hpp"
+#include <valgrind/memcheck.h>
 
 void Object::printToFd(int fd) {
   RawObject *raw = unTag<RawObject>();
@@ -155,9 +156,28 @@ void Object::gcScavenge(ThreadState *ts) {
         intptr_t offset = info->funcConstOffset()->
                           raw()->vectorAt(i)->fromFixnum();
         intptr_t ptrLoc = info->funcCodeAs<intptr_t>() + offset;
-        //Util::logObj("scavenge const", *(Object **) ptrLoc);
+
+        //Object *oldPtrVal = *(Object **) ptrLoc;
+
         ts->gcScavenge(reinterpret_cast<Object **>(ptrLoc));
+
+        //dprintf(2, "[ScavCodeReloc] %s[%ld] (which is %p) %p => %p ",
+        //        info->funcName()->rawSymbol(),
+        //        offset,
+        //        (void *) ptrLoc,
+        //        *(Object **) ptrLoc,
+        //        oldPtrVal);
+
+        //(*(Object **) ptrLoc)->displayDetail(2);
+        //dprintf(2, "\n");
       }
+
+      // And instructs valgrind to discard out-of-date jitted codes
+      // Must do this since otherwise we have changed our code
+      VALGRIND_DISCARD_TRANSLATIONS(
+          info->funcCodeAs<char *>(),
+          info->funcCodeAs<char *>() + info->funcSize() -
+          RawObject::kFuncCodeOffset);
       break;
     }
     case RawObject::kVectorTag:

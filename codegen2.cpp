@@ -233,6 +233,8 @@ void CGFunction::compileFunction() {
   popFrame();
   __ ret();
 
+  // Used for debugging
+  intptr_t codeSize = __ getCodeSize();
   // Create function and patch closure.
   void *rawPtr = __ make();
 
@@ -241,6 +243,7 @@ void CGFunction::compileFunction() {
   rawFunc = Object::newFunction(rawPtr, arity, name,
       /* const ptr offset array */ trimmedConstOffsets,
       /* num payload */ 0);
+  rawFunc->funcSize() = codeSize;
   closure->raw()->cloInfo() = rawFunc;
 
   // Patch relocs
@@ -251,6 +254,10 @@ void CGFunction::compileFunction() {
     intptr_t offset = Util::arrayAt(ptrOffsets, i)->fromFixnum();
     Object **addr = reinterpret_cast<Object **>(base + offset);
     *addr = ptrVal;
+
+    //dprintf(2, "[PatchCodeReloc] %s[%ld] ", name->rawSymbol(), offset);
+    //ptrVal->displayDetail(2);
+    //dprintf(2, "\n");
   }
 
   Util::logPtr("CompileFunction Done", rawFunc->funcCodeAs<void *>());
@@ -496,56 +503,10 @@ bool CGFunction::tryPrimOp(const Handle &xs, bool isTail) {
   }
   else if (opName == parent->symPrimCons && len == 3) {
     // (cons# 1 2)
-    size_t hSize = sizeof(GcHeader);
-    size_t rawAllocSize = RawObject::kSizeOfPair + hSize;
-    assert(Util::aligned<4>(rawAllocSize));
     compileExpr(Util::arrayAt(xs, 1));
     compileExpr(Util::arrayAt(xs, 2));
 
-    auto labelRetry = __ newLabel();
-    __ bind(labelRetry);
-
-    __ lea(rcx, qword_ptr(kHeapPtr, rawAllocSize));
-    __ cmp(rcx, kHeapLimit);
-    auto labelAlloc = __ newLabel();
-    __ jle(labelAlloc);
-
-    {
-      // Call runtime gc
-      __ mov(rdi, RawObject::kSizeOfPair);
-      __ mov(rsi, rsp);
-      __ mov(rdx, makeFrameDescr());
-      __ mov(rcx, kThreadState);
-      __ call(reinterpret_cast<intptr_t>(&Runtime::collectAndAlloc));
-      // Extract new heapPtr and limitPtr
-      __ mov(kHeapPtr,
-          qword_ptr(kThreadState, kPtrSize * ThreadState::kHeapPtrOffset));
-      __ mov(kHeapLimit,
-          qword_ptr(kThreadState, kPtrSize * ThreadState::kHeapLimitOffset));
-      // And retry
-      __ jmp(labelRetry);
-    }
-
-    __ bind(labelAlloc);
-
-    // Alloc done, initializing..
-    // Init gc header. @See gc.hpp's initGcHeader
-    __ mov(qword_ptr(kHeapPtr, 8), GcHeader::fromRuntimeAlloc(rawAllocSize));
-
-    // Put cdr
-    popReg(rax);
-    __ mov(qword_ptr(kHeapPtr, hSize + RawObject::kCdrOffset), rax);
-
-    // Put car
-    popReg(rax);
-    __ mov(qword_ptr(kHeapPtr, hSize + RawObject::kCarOffset), rax);
-
-    // GcHeader padding and tag
-    __ add(kHeapPtr, hSize + RawObject::kPairTag);
-    pushReg(kHeapPtr, kIsPtr);
-
-    // Write new heapPtr back
-    __ mov(kHeapPtr, rcx);
+    allocPair();
   }
   else if (opName == parent->symPrimTrace && len == 3) {
     compileExpr(Util::arrayAt(xs, 1));
@@ -558,6 +519,66 @@ bool CGFunction::tryPrimOp(const Handle &xs, bool isTail) {
   }
 
   return true;
+}
+
+void CGFunction::allocPair() {
+  size_t hSize = sizeof(GcHeader);
+  size_t rawAllocSize = RawObject::kSizeOfPair + hSize;
+  assert(Util::isAligned<4>(rawAllocSize));
+  assert(hSize == 0x10);
+
+  auto labelAllocOk = __ newLabel();
+
+#ifndef kSanyaGCDebug
+  // Try alloc
+  __ lea(rcx, qword_ptr(kHeapPtr, rawAllocSize));
+  __ cmp(rcx, kHeapLimit);
+  __ jle(labelAllocOk);
+#endif
+
+  // Alloc failed: Do GC
+  __ mov(
+      qword_ptr(kThreadState, kPtrSize * ThreadState::kHeapPtrOffset),
+      kHeapPtr);
+  __ mov(
+      qword_ptr(kThreadState, kPtrSize * ThreadState::kHeapLimitOffset),
+      kHeapLimit);
+
+  __ mov(rdi, rawAllocSize);
+  __ mov(rsi, rsp);
+  __ mov(rdx, makeFrameDescr());
+  __ mov(rcx, kThreadState);
+  __ call(reinterpret_cast<void *>(&Runtime::collectAndAlloc));
+  // Extract new heapPtr and limitPtr
+  __ mov(kHeapPtr,
+      qword_ptr(kThreadState, kPtrSize * ThreadState::kHeapPtrOffset));
+  __ mov(kHeapLimit,
+      qword_ptr(kThreadState, kPtrSize * ThreadState::kHeapLimitOffset));
+  // And retry
+  __ lea(rcx, qword_ptr(kHeapPtr, rawAllocSize));
+
+  // Alloc ok: fill content
+  __ bind(labelAllocOk);
+  // Init gc header
+  // Mark: 0
+  __ mov(dword_ptr(kHeapPtr, 0), 0);
+  // size: (precalculated)
+  __ mov(dword_ptr(kHeapPtr, 4), rawAllocSize);
+
+  // Put cdr
+  popReg(rax);
+  __ mov(qword_ptr(kHeapPtr, hSize + RawObject::kCdrOffset), rax);
+
+  // Put car
+  popReg(rax);
+  __ mov(qword_ptr(kHeapPtr, hSize + RawObject::kCarOffset), rax);
+
+  // GcHeader padding and tag
+  __ add(kHeapPtr, hSize + RawObject::kPairTag);
+  pushReg(kHeapPtr, kIsPtr);
+
+  // Write new heapPtr back
+  __ mov(kHeapPtr, rcx);
 }
 
 void CGFunction::shiftLocal(intptr_t n) {

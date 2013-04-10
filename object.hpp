@@ -51,6 +51,7 @@ class RawObject : public Base<RawObject> {
     kFuncNameOffset             = 0x8,
     kFuncConstOffsetOffset      = 0x10,
     kFuncNumPayloadOffset       = 0x18,
+    kFuncSizeOffset             = 0x1c,
     kFuncCodeOffset             = 0x20, // variable-sized
 
     kCloInfoOffset              = 0x0,
@@ -90,18 +91,19 @@ TAG_LIST(MK_TAG_AS)
 #define MK_ATTR(name, offset, type) \
   type &name() { return at<offset ## Offset, type>(); }
 
-#define ATTR_LIST(V)                                            \
-  V(car,            kCar,            Object *)                  \
-  V(cdr,            kCdr,            Object *)                  \
-  V(funcArity,      kFuncArity,      intptr_t)                  \
-  V(funcName,       kFuncName,       Object *)                  \
-  V(funcConstOffset,      kFuncConstOffset,      Object *)                  \
-  V(funcCode,       kFuncCode,       char)                      \
-  V(funcNumPayload, kFuncNumPayload, intptr_t)                  \
-  V(vectorSize,     kVectorSize,     intptr_t)                  \
-  V(vectorElem,     kVectorElem,     Object *)                  \
-  V(cloInfo,        kCloInfo,        RawObject *)               \
-  V(cloPayload_,    kCloPayload,     Object *)                  \
+#define ATTR_LIST(V)                                              \
+  V(car,             kCar,             Object *)                  \
+  V(cdr,             kCdr,             Object *)                  \
+  V(funcArity,       kFuncArity,       intptr_t)                  \
+  V(funcName,        kFuncName,        Object *)                  \
+  V(funcConstOffset, kFuncConstOffset, Object *)                  \
+  V(funcCode,        kFuncCode,        char)                      \
+  V(funcNumPayload,  kFuncNumPayload,  int32_t)                   \
+  V(funcSize,        kFuncSize,        int32_t)                   \
+  V(vectorSize,      kVectorSize,      intptr_t)                  \
+  V(vectorElem,      kVectorElem,      Object *)                  \
+  V(cloInfo,         kCloInfo,         RawObject *)               \
+  V(cloPayload_,     kCloPayload,      Object *)                  \
   // Append
 
   ATTR_LIST(MK_ATTR);
