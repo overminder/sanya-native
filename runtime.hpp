@@ -9,9 +9,10 @@ class ThreadState;
 class Runtime {
  public:
   // Error handlers
-  static void handleNotAClosure(Object *);
-  static void handleArgCountMismatch(Object *, intptr_t);
+  static void handleNotAClosure(Object *, ThreadState *);
+  static void handleArgCountMismatch(Object *, intptr_t, ThreadState *);
   static void handleUserError(Object *, ThreadState *);
+  static void handleStackOvf(ThreadState *);
 
   // GC
   static void collectAndAlloc(ThreadState *ts);
@@ -30,6 +31,8 @@ struct Option {
 
   bool kTailCallOpt;
   bool kInitialized;
+  bool kInsertStackCheck;
+  bool kLogInfo;
 };
 
 #endif

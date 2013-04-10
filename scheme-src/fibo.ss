@@ -1,10 +1,10 @@
 (define main
   (lambda ()
-    (trace# (fibo 10) 0)))
+    (display# (fibo 40))
+    (newline#)))
 
 (define fibo
   (lambda (n)
-    (cons# 1 2)
     (if (<# n 2)
         n
 	(+# (fibo (-# n 1))

@@ -1,5 +1,5 @@
 CXXFLAGS += $(INCLUDE) -std=c++0x -Wno-pmf-conversions -O0 -g -Wall
-CXXFLAGS += -D kSanyaGCDebug
+#CXXFLAGS += -D kSanyaGCDebug
 
 LDFLAGS += -lasmjit -L/usr/local/lib -g
 

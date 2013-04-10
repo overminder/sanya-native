@@ -77,6 +77,8 @@ class CGModule {
          symPrimCons,
 
          symPrimTrace,
+         symPrimDisplay,
+         symPrimNewLine,
          symPrimError,
          symMain;
 
@@ -113,13 +115,22 @@ class CGFunction {
   void compileExpr(const Handle &expr, bool isTail = false);
   void compileCall(const Handle &xs, bool isTail);
 
+  enum LookupResult {
+    kIsLocal,
+    kIsGlobal,
+    kNotFound
+  };
+
+  // Special case operators
+  bool tryDefine(const Handle &expr);
+  bool trySete(const Handle &expr);
   bool tryIf(const Handle &expr, bool isTail);
   bool tryQuote(const Handle &expr);
   bool tryBegin(const Handle &expr, bool isTail);
   bool tryPrimOp(const Handle &expr, bool isTail);
 
   // Stores regs back to ThreadState. Uses %rax only.
-  void syncThreadState();
+  void syncThreadState(FrameDescr *fdToUse = NULL);
 
   intptr_t getThisClosure();
   intptr_t getFrameDescr();
@@ -146,6 +157,7 @@ class CGFunction {
   void popPhysicalFrame();
   void popReg(const AsmJit::GpReg &r);
 
+  intptr_t lookupName(const Handle &name, LookupResult *);
   intptr_t lookupLocal(const Handle &name) {
     bool ok;
     Handle result = Util::assocLookup(locals, name, Util::kPtrEq, &ok);

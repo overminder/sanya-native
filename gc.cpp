@@ -18,7 +18,7 @@ ThreadState *ThreadState::create() {
   ts->lastStackPtr()   = 0;
 
   // Init gc
-  ts->heapSize()      = 7 * KB;
+  ts->heapSize()      = 256 * KB;
 #ifndef kSanyaGCDebug
   ts->heapBase()      = (intptr_t) malloc(ts->heapSize() * 2);
   ts->heapPtr()       = ts->heapBase();
@@ -65,7 +65,8 @@ void ThreadState::destroy() {
 }
 
 void ThreadState::display(int fd) {
-  dprintf(fd, "[ThreadState] Hp = %ld, HpLim = %ld\n", heapPtr(), heapLimit());
+  dprintf(fd, "[ThreadState] Hp = %ld, HpLim = %ld\n",
+          heapPtr(), heapLimit());
 }
 
 void *ThreadState::gcAllocSlow(size_t size) {
@@ -151,12 +152,15 @@ void ThreadState::gcCollect() {
   heapPtr()         = heapCopyPtr();
   heapLimit()       = heapFromSpace() + heapSize();
 
-  dprintf(2, "[gcCollect] (%ld/%ld)\n",
-              heapSize() - (heapLimit() - heapPtr()),
-              heapSize());
+  if (Option::global().kLogInfo) {
+    dprintf(2, "[gcCollect] (%ld/%ld)\n",
+                heapSize() - (heapLimit() - heapPtr()),
+                heapSize());
+  }
 
   if (heapLimit() - heapPtr() < (intptr_t) lastAllocReq()) {
     dprintf(2, "gcCollect: heap exhausted by req %ld\n", lastAllocReq());
+    exit(1);
   }
 }
 
@@ -170,9 +174,9 @@ void ThreadState::gcScavengeSchemeStack() {
     return;
   }
 
-  dprintf(2, "[ScavScm] lastScmSp = %p, retaddr = %p\n",
-          (void **) stackPtr,
-          ((void **) stackPtr)[-1]);
+  //dprintf(2, "[ScavScm] lastScmSp = %p, retaddr = %p\n",
+  //        (void **) stackPtr,
+  //        ((void **) stackPtr)[-1]);
 
   while (true) {
     for (intptr_t i = 0; i < fd.frameSize; ++i) {

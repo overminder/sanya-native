@@ -1,6 +1,6 @@
 (define main
   (lambda ()
-    (trace# (loopsum 0 10000000 0)
+    (trace# (loopsum 0 100000 0)
 	    0)))
 
 (define loopsum

@@ -49,6 +49,7 @@ class RawObject : public Base<RawObject> {
     kNilUpper                   = 0x0,
     kTrueUpper                  = 0x1,
     kFalseUpper                 = 0x2,
+    kVoidUpper                  = 0x3,
 
     kFuncArityOffset            = 0x0,
     kFuncNameOffset             = 0x8,
@@ -177,7 +178,7 @@ class Object : public Base<Object> {
   }
 
 #define SINGLETONS(V) \
-  V(Nil) V(True) V(False)
+  V(Nil) V(True) V(False) V(Void)
 #define MK_SINGLETON(name) \
   static Object *new ## name() { \
     return RawObject::from(RawObject::k ## name ## Upper << \

@@ -65,6 +65,9 @@ void Object::displayDetail(int fd) {
     else if (this == newFalse()) {
       dprintf(fd, "#f");
     }
+    else if (this == newVoid()) {
+      dprintf(fd, "<void>");
+    }
     else {
       dprintf(fd, "<Unknown-singleton %p>", this);
     }

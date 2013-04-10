@@ -28,7 +28,11 @@ Object *callScheme_0(Object *clo) {
   assert(info->funcArity() == 0);
   auto entry = info->funcCodeAs<void *>();
   ThreadState *ts = &ThreadState::global();
-  Util::logObj("CallScheme", clo);
+
+  if (Option::global().kLogInfo) {
+    Util::logObj("CallScheme", clo);
+  }
+
   return Scheme_asmEntry(clo, entry, ts->heapPtr(), ts->heapLimit(), ts);
 }
 

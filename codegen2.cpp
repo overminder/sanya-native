@@ -3,6 +3,9 @@
 #include "codegen2.hpp"
 #include "runtime.hpp"
 
+#define KB 1024
+#define MB (KB * KB)
+
 using namespace AsmJit;
 
 static const int kPtrSize = sizeof(void *);
@@ -97,18 +100,21 @@ static Object *listToArray(const Handle &xs, Handle *out) {
 }
 
 CGModule::CGModule() {
-  symDefine    = Object::internSymbol("define");
-  symLambda    = Object::internSymbol("lambda");
-  symQuote     = Object::internSymbol("quote");
-  symBegin     = Object::internSymbol("begin");
-  symIf        = Object::internSymbol("if");
-  symPrimAdd   = Object::internSymbol("+#");
-  symPrimSub   = Object::internSymbol("-#");
-  symPrimLt    = Object::internSymbol("<#");
-  symPrimCons  = Object::internSymbol("cons#");
-  symPrimTrace = Object::internSymbol("trace#");
-  symPrimError = Object::internSymbol("error#");
-  symMain      = Object::internSymbol("main");
+  symDefine      = Object::internSymbol("define");
+  symSete        = Object::internSymbol("set!");
+  symLambda      = Object::internSymbol("lambda");
+  symQuote       = Object::internSymbol("quote");
+  symBegin       = Object::internSymbol("begin");
+  symIf          = Object::internSymbol("if");
+  symPrimAdd     = Object::internSymbol("+#");
+  symPrimSub     = Object::internSymbol("-#");
+  symPrimLt      = Object::internSymbol("<#");
+  symPrimCons    = Object::internSymbol("cons#");
+  symPrimTrace   = Object::internSymbol("trace#");
+  symPrimDisplay = Object::internSymbol("display#");
+  symPrimNewLine = Object::internSymbol("newline#");
+  symPrimError   = Object::internSymbol("error#");
+  symMain        = Object::internSymbol("main");
 
 #define DEF_SYM(scmName, cxxName) \
   symPrim ## cxxName ## p = Object::internSymbol(#scmName "#");
@@ -211,7 +217,10 @@ void CGFunction::emitFuncHeader() {
 }
 
 void CGFunction::compileFunction() {
-  Util::logObj("CompileFunction Start", name);
+
+  if (Option::global().kLogInfo) {
+    Util::logObj("CompileFunction Start", name);
+  }
 
   emitFuncHeader();
 
@@ -238,6 +247,20 @@ void CGFunction::compileFunction() {
     addNewLocal(arg);
   }
 
+  // Check stack overflow
+  auto labelStackOvf = __ newLabel();
+  FrameDescr fdAtPrologue = FrameDescr::unpack(makeFrameDescr());
+  if (Option::global().kInsertStackCheck) {
+    // diff = ts.firstSp - currSp;
+    // if (diff > 1MB) {
+    //   handleStackOvf();
+    // }
+    __ lea(rax, qword_ptr(rsp, 1 * MB));
+    __ cmp(rax, qword_ptr(kThreadState,
+                          kPtrSize * ThreadState::kFirstStackPtrOffset));
+    __ jl(labelStackOvf);
+  }
+
   // TCO can be runtime-specified
   compileBody(lamBody, 2, Option::global().kTailCallOpt);
 
@@ -245,6 +268,14 @@ void CGFunction::compileFunction() {
   popReg(rax);
   popFrame();
   __ ret();
+
+  // Handles stack overflow
+  if (Option::global().kInsertStackCheck) {
+    __ bind(labelStackOvf);
+    syncThreadState(&fdAtPrologue);
+    __ mov(rdi, kThreadState);
+    __ jmp((void *) Runtime::handleStackOvf);
+  }
 
   // Used for debugging
   intptr_t codeSize = __ getCodeSize();
@@ -273,7 +304,9 @@ void CGFunction::compileFunction() {
     //dprintf(2, "\n");
   }
 
-  Util::logPtr("CompileFunction Done", rawFunc->funcCodeAs<void *>());
+  if (Option::global().kLogInfo) {
+    Util::logPtr("CompileFunction Done", rawFunc->funcCodeAs<void *>());
+  }
 }
 
 void CGFunction::compileBody(const Handle &body, intptr_t start,
@@ -300,22 +333,18 @@ void CGFunction::compileExpr(const Handle &expr, bool isTail) {
     break;
 
   case RawObject::kSymbolTag:
+  {
+    LookupResult varLoc;
     // Lookup first
-    ix = lookupLocal(expr);
-    if (ix != -1) {
-      // Is local
+    ix = lookupName(expr, &varLoc);
+    if (varLoc == kIsLocal) {
       __ mov(rax, qword_ptr(rsp, ix * kPtrSize));
       pushReg(rax, kIsPtr);
-      break;
     }
-    else {
-      ix = parent->lookupGlobal(expr);
-      if (ix == -1) {
-        dprintf(2, "lookupGlobal: %s not found\n", expr->rawSymbol());
-        exit(1);
-      }
+    else if (varLoc == kIsGlobal) {
       __ mov(rax, 0L);
-      // References a ptr so need to do this
+      // We add this pointer into our code later,
+      // since copying gc cannot track into unfinished code.
       recordLastPtrOffset();
       recordReloc(parent->moduleGlobalVector);
 
@@ -323,8 +352,13 @@ void CGFunction::compileExpr(const Handle &expr, bool isTail) {
             RawObject::kVectorElemOffset - RawObject::kVectorTag +
             kPtrSize * ix));
       pushReg(rax, kIsPtr);
-      break;
     }
+    else {
+      dprintf(2, "lookupGlobal: %s not found\n", expr->rawSymbol());
+      exit(1);
+    }
+    break;
+  }
 
   case RawObject::kPairTag:
   {
@@ -333,6 +367,10 @@ void CGFunction::compileExpr(const Handle &expr, bool isTail) {
 
     // Check for define
     if (tryIf(xs, isTail)) {
+    }
+    else if (tryDefine(xs)) {
+    }
+    else if (trySete(xs)) {
     }
     else if (tryBegin(xs, isTail)) {
     }
@@ -378,6 +416,8 @@ void CGFunction::compileCall(const Handle &xs, bool isTail) {
     popReg(kArgRegsWithClosure[i]);
   }
 
+  FrameDescr savedFd = FrameDescr::unpack(makeFrameDescr());
+
   // Check closure type
   __ mov(rax, rdi);
   __ and_(eax, RawObject::kTagMask);
@@ -420,23 +460,99 @@ void CGFunction::compileCall(const Handle &xs, bool isTail) {
     pushVirtual(kIsPtr);
   }
 
-  // Not a closure(%rdi = func)
+  // Not a closure(%rdi = func, rsi = threadstate)
   __ bind(labelNotAClosure);
-  __ call(reinterpret_cast<void *>(&Runtime::handleNotAClosure));
+  syncThreadState(&savedFd);
+  __ mov(rsi, kThreadState);
+  __ jmp(reinterpret_cast<void *>(&Runtime::handleNotAClosure));
 
-  // Wrong arg count(%rdi = func, %rsi = actual argc)
+  // Wrong arg count(%rdi = func, %rsi = actual argc, rdx = threadstate)
   __ bind(labelArgCountMismatch);
+  syncThreadState(&savedFd);
   __ mov(rsi, argc);
-  __ call(reinterpret_cast<void *>(&Runtime::handleArgCountMismatch));
+  __ mov(rdx, kThreadState);
+  __ jmp(reinterpret_cast<void *>(&Runtime::handleArgCountMismatch));
 
   if (!isTail) {
     __ bind(labelOk);
   }
 }
 
+intptr_t CGFunction::lookupName(const Handle &name, LookupResult *out) {
+  intptr_t ix = lookupLocal(name);
+  if (ix != -1) {
+    *out = kIsLocal;
+    return ix;
+  }
+
+  ix = parent->lookupGlobal(name);
+  if (ix != -1) {
+    *out = kIsGlobal;
+    return ix;
+  }
+
+  *out = kNotFound;
+  return -1;
+}
+
+bool CGFunction::tryDefine(const Handle &xs) {
+  intptr_t len = Util::arrayLength(xs);
+  if (len != 3 || Util::arrayAt(xs, 0) != parent->symDefine) {
+    return false;
+  }
+
+  assert(Util::arrayAt(xs, 1)->isSymbol());
+  compileExpr(Util::arrayAt(xs, 2));
+  // XXX: handle duplicate define?
+  addNewLocal(Util::arrayAt(xs, 1));
+  pushObject(Object::newVoid());
+  return true;
+}
+
+bool CGFunction::trySete(const Handle &xs) {
+  intptr_t len = Util::arrayLength(xs);
+  if (len != 3 || Util::arrayAt(xs, 0) != parent->symSete) {
+    return false;
+  }
+  Handle varName = Util::arrayAt(xs, 1);
+  assert(varName->isSymbol());
+
+  // Eval and pop to rax
+  compileExpr(Util::arrayAt(xs, 2));
+  popReg(rax);
+
+  LookupResult loc;
+  intptr_t ix = lookupName(varName, &loc);
+
+  if (loc == kIsLocal) {
+    __ mov(qword_ptr(rsp, ix * kPtrSize), rax);
+  }
+  else if (loc == kIsGlobal) {
+    __ mov(rcx, 0L);
+    // We add this pointer into our code later,
+    // since copying gc cannot track into unfinished code.
+    recordLastPtrOffset();
+    recordReloc(parent->moduleGlobalVector);
+
+    // Write back. XXX: write barrier when using generational GC?
+    __ mov(qword_ptr(rcx, RawObject::kVectorElemOffset -
+                          RawObject::kVectorTag + kPtrSize * ix),
+        rax);
+  }
+  else {
+    dprintf(2, "set!: variable not defined: ");
+    varName->displayDetail(2);
+    dprintf(2, "\n");
+    exit(1);
+  }
+  pushObject(Object::newVoid());
+  return true;
+}
+
+
 bool CGFunction::tryIf(const Handle &xs, bool isTail) {
   intptr_t len = Util::arrayLength(xs);
-  if (len != 4 || !(Util::arrayAt(xs, 0) == parent->symIf)) {
+  if (len != 4 || Util::arrayAt(xs, 0) != parent->symIf) {
     return false;
   }
 
@@ -552,7 +668,7 @@ PRIM_TAG_PREDICATES(MK_IMPL)
 #undef MK_IMPL
 
 #define MK_IMPL(_unused, objName)                                       \
-  else if (opName == parent->symPrimNilp && len == 2) {                 \
+  else if (opName == parent->symPrim ## objName ## p && len == 2) {     \
     compileExpr(Util::arrayAt(xs, 1));                                  \
     popReg(rax);                                                        \
     __ mov(ecx, reinterpret_cast<intptr_t>(Object::new ## objName()));  \
@@ -571,6 +687,19 @@ PRIM_SINGLETON_PREDICATES(MK_IMPL)
     __ call(reinterpret_cast<intptr_t>(&Runtime::traceObject));
     compileExpr(Util::arrayAt(xs, 2), isTail);
   }
+  else if (opName == parent->symPrimDisplay && len == 2) {
+    compileExpr(Util::arrayAt(xs, 1));
+    // Stdout
+    popReg(rdi);
+    __ mov(esi, 1);
+    __ call(reinterpret_cast<intptr_t>((void *) &Object::displayDetail));
+    pushObject(Object::newVoid());
+  }
+  else if (opName == parent->symPrimNewLine && len == 1) {
+    __ mov(edi, 1);
+    __ call(reinterpret_cast<intptr_t>((void *) &Runtime::printNewLine));
+    pushObject(Object::newVoid());
+  }
   else if (opName == parent->symPrimError && len == 2) {
     // (error# anything)
     compileExpr(Util::arrayAt(xs, 1));
@@ -578,7 +707,10 @@ PRIM_SINGLETON_PREDICATES(MK_IMPL)
     popReg(rdi);
     syncThreadState();
     __ mov(rsi, kThreadState);
-    __ jmp((void *) &Runtime::handleUserError);
+    __ jmp((intptr_t) &Runtime::handleUserError);
+
+    // To keep stack balence
+    pushVirtual(kIsPtr);
   }
   else {
     return false;
@@ -754,7 +886,7 @@ intptr_t CGFunction::makeFrameDescr() {
   return fd.pack();
 }
 
-void CGFunction::syncThreadState() {
+void CGFunction::syncThreadState(FrameDescr *fdToUse) {
   // Store gc info
   __ mov(
       qword_ptr(kThreadState, kPtrSize * ThreadState::kHeapPtrOffset),
@@ -764,7 +896,7 @@ void CGFunction::syncThreadState() {
       kHeapLimit);
 
   // Store frame descr
-  __ mov(rax, makeFrameDescr());
+  __ mov(rax, fdToUse ? fdToUse->pack() : makeFrameDescr());
   __ mov(
       qword_ptr(kThreadState,
         kPtrSize * ThreadState::kLastFrameDescrOffset),
