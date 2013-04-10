@@ -11,13 +11,14 @@ class Runtime {
   // Error handlers
   static void handleNotAClosure(Object *);
   static void handleArgCountMismatch(Object *, intptr_t);
+  static void handleUserError(Object *, ThreadState *);
 
   // GC
-  static void collectAndAlloc(size_t size, intptr_t stackPtr,
-                              void *frameDescr, ThreadState *ts);
+  static void collectAndAlloc(ThreadState *ts);
 
   // Debug
   static void traceObject(Object *);
+  static intptr_t endOfCode(intptr_t);
 
   // Library
   static void printNewLine(int fd);

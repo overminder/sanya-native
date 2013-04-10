@@ -85,6 +85,7 @@ void ThreadState::gcScavenge(Object **loc) {
   if (!ptr || !ptr->isHeapAllocated()) {
     return;
   }
+  //dprintf(2, "[GcScav] [%p] %ld (%p)\n", loc, (intptr_t) ptr, ptr);
   RawObject::Tag ptrTag = ptr->getTag();
   GcHeader *h = GcHeader::fromRawObject(ptr->raw());
 
@@ -168,6 +169,10 @@ void ThreadState::gcScavengeSchemeStack() {
   if (stackPtr == stackTop) {
     return;
   }
+
+  dprintf(2, "[ScavScm] lastScmSp = %p, retaddr = %p\n",
+          (void **) stackPtr,
+          ((void **) stackPtr)[-1]);
 
   while (true) {
     for (intptr_t i = 0; i < fd.frameSize; ++i) {

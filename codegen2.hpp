@@ -55,8 +55,15 @@ class CGModule {
          symPrimAdd,
          symPrimSub,
          symPrimLt,
+
          symPrimCons,
+         symPrimCar,
+         symPrimCdr,
+         symPrimPairp,
+         symPrimNullp,
+
          symPrimTrace,
+         symPrimError,
          symMain;
 
   std::vector<CGFunction *> cgfuncs;
@@ -85,6 +92,8 @@ class CGFunction {
   bool tryQuote(const Handle &expr);
   bool tryBegin(const Handle &expr, bool isTail);
   bool tryPrimOp(const Handle &expr, bool isTail);
+
+  void syncThreadState();
 
   intptr_t getThisClosure();
   intptr_t getFrameDescr();

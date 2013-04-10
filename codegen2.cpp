@@ -106,7 +106,12 @@ CGModule::CGModule() {
   symPrimSub   = Object::internSymbol("-#");
   symPrimLt    = Object::internSymbol("<#");
   symPrimCons  = Object::internSymbol("cons#");
+  symPrimCar  = Object::internSymbol("car#");
+  symPrimCdr  = Object::internSymbol("cdr#");
+  symPrimPairp  = Object::internSymbol("pair?#");
+  symPrimNullp  = Object::internSymbol("null?#");
   symPrimTrace = Object::internSymbol("trace#");
+  symPrimError = Object::internSymbol("error#");
   symMain      = Object::internSymbol("main");
 }
 
@@ -367,8 +372,8 @@ void CGFunction::compileCall(const Handle &xs, bool isTail) {
 
   // Check closure type
   __ mov(rax, rdi);
-  __ and_(eax, 15);
-  __ cmp(rax, RawObject::kClosureTag);
+  __ and_(eax, RawObject::kTagMask);
+  __ cmp(eax, RawObject::kClosureTag);
   auto labelNotAClosure = __ newLabel();
   __ jne(labelNotAClosure);
 
@@ -396,6 +401,9 @@ void CGFunction::compileCall(const Handle &xs, bool isTail) {
     __ jmp(labelOk);
   }
   else {
+    // Get caller's FD
+    __ mov(kFrameDescrReg, qword_ptr(rsp, getFrameDescr()));
+
     popPhysicalFrame();
     // Tail call
     __ jmp(rax);
@@ -496,8 +504,8 @@ bool CGFunction::tryPrimOp(const Handle &xs, bool isTail) {
     compileExpr(Util::arrayAt(xs, 2));
     popReg(rax);
     __ cmp(rax, qword_ptr(rsp));
-    __ mov(rcx, Object::newTrue()->as<intptr_t>());
-    __ mov(rax, Object::newFalse()->as<intptr_t>());
+    __ mov(ecx, Object::newTrue()->as<intptr_t>());
+    __ mov(eax, Object::newFalse()->as<intptr_t>());
     __ cmovg(rax, rcx);
     __ mov(qword_ptr(rsp), rax);
   }
@@ -508,11 +516,62 @@ bool CGFunction::tryPrimOp(const Handle &xs, bool isTail) {
 
     allocPair();
   }
+  else if (opName == parent->symPrimCar && len == 2) {
+    // (car# xs)
+    compileExpr(Util::arrayAt(xs, 1));
+
+    popReg(rax);
+    __ mov(rax, qword_ptr(rax,
+          RawObject::kCarOffset - RawObject::kPairTag));
+    pushReg(rax, kIsPtr);
+  }
+  else if (opName == parent->symPrimCdr && len == 2) {
+    // (cdr# xs)
+    compileExpr(Util::arrayAt(xs, 1));
+
+    popReg(rax);
+    __ mov(rax, qword_ptr(rax,
+          RawObject::kCdrOffset - RawObject::kPairTag));
+    pushReg(rax, kIsPtr);
+  }
+  else if (opName == parent->symPrimPairp && len == 2) {
+    // (pair?# xs)
+    compileExpr(Util::arrayAt(xs, 1));
+
+    popReg(rax);
+    __ and_(eax, RawObject::kTagMask);
+    __ cmp(eax, RawObject::kPairTag);
+    __ mov(ecx, Object::newTrue()->as<intptr_t>());
+    __ mov(eax, Object::newFalse()->as<intptr_t>());
+    __ cmove(eax, ecx);
+    pushReg(rax, kIsPtr);
+  }
+  else if (opName == parent->symPrimNullp && len == 2) {
+    // (null?# xs)
+    compileExpr(Util::arrayAt(xs, 1));
+
+    popReg(rax);
+    __ mov(ecx, reinterpret_cast<intptr_t>(Object::newNil()));
+    __ cmp(rax, rcx);
+    __ mov(ecx, Object::newTrue()->as<intptr_t>());
+    __ mov(eax, Object::newFalse()->as<intptr_t>());
+    __ cmove(eax, ecx);
+    pushReg(rax, kIsPtr);
+  }
   else if (opName == parent->symPrimTrace && len == 3) {
     compileExpr(Util::arrayAt(xs, 1));
     popReg(rdi);
     __ call(reinterpret_cast<intptr_t>(&Runtime::traceObject));
     compileExpr(Util::arrayAt(xs, 2), isTail);
+  }
+  else if (opName == parent->symPrimError && len == 2) {
+    // (error# anything)
+    compileExpr(Util::arrayAt(xs, 1));
+
+    popReg(rdi);
+    syncThreadState();
+    __ mov(rsi, kThreadState);
+    __ jmp((void *) &Runtime::handleUserError);
   }
   else {
     return false;
@@ -537,17 +596,13 @@ void CGFunction::allocPair() {
 #endif
 
   // Alloc failed: Do GC
-  __ mov(
-      qword_ptr(kThreadState, kPtrSize * ThreadState::kHeapPtrOffset),
-      kHeapPtr);
-  __ mov(
-      qword_ptr(kThreadState, kPtrSize * ThreadState::kHeapLimitOffset),
-      kHeapLimit);
+  syncThreadState();
+  __ mov(rax, rawAllocSize);
+  __ mov(qword_ptr(kThreadState,
+        kPtrSize * ThreadState::kLastAllocReqOffset),
+        rax);
 
-  __ mov(rdi, rawAllocSize);
-  __ mov(rsi, rsp);
-  __ mov(rdx, makeFrameDescr());
-  __ mov(rcx, kThreadState);
+  __ mov(rdi, kThreadState);
   __ call(reinterpret_cast<void *>(&Runtime::collectAndAlloc));
   // Extract new heapPtr and limitPtr
   __ mov(kHeapPtr,
@@ -690,5 +745,29 @@ intptr_t CGFunction::makeFrameDescr() {
   }
   //dprintf(2, "[mkFd %s] fd = %ld\n", name->rawSymbol(), fd.pack());
   return fd.pack();
+}
+
+// Use rax only
+void CGFunction::syncThreadState() {
+  // Store gc info
+  __ mov(
+      qword_ptr(kThreadState, kPtrSize * ThreadState::kHeapPtrOffset),
+      kHeapPtr);
+  __ mov(
+      qword_ptr(kThreadState, kPtrSize * ThreadState::kHeapLimitOffset),
+      kHeapLimit);
+
+  // Store frame descr
+  __ mov(rax, makeFrameDescr());
+  __ mov(
+      qword_ptr(kThreadState,
+        kPtrSize * ThreadState::kLastFrameDescrOffset),
+      rax);
+
+  // And stack ptr
+  __ mov(
+      qword_ptr(kThreadState,
+        kPtrSize * ThreadState::kLastStackPtrOffset),
+      rsp);
 }
 

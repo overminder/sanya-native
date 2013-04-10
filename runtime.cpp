@@ -20,12 +20,22 @@ void Runtime::handleArgCountMismatch(Object *wat, intptr_t argc) {
   exit(1);
 }
 
-void Runtime::collectAndAlloc(size_t size, intptr_t stackPtr,
-                              void *frameDescr, ThreadState *ts) {
+void Runtime::handleUserError(Object *wat, ThreadState *ts) {
+  Util::logObj("UserError", wat);
+
+  FrameDescr fd = ts->lastFrameDescr();
+  intptr_t stackPtr = ts->lastStackPtr();
+
+  for (intptr_t i = 0; i < fd.frameSize; ++i) {
+    if (fd.isPtr(i)) {
+      Object **loc = reinterpret_cast<Object **>(stackPtr + i * 8);
+      Util::logObj("Frame Local", *loc);
+    }
+  }
+}
+
+void Runtime::collectAndAlloc(ThreadState *ts) {
   // 8: return address slot
-  ts->lastFrameDescr() = *reinterpret_cast<FrameDescr *>(&frameDescr);
-  ts->lastStackPtr() = stackPtr;
-  ts->lastAllocReq() = size;
   dprintf(2, "[Runtime::collect]\n");
   ts->gcCollect();
 
@@ -60,6 +70,11 @@ void Runtime::traceObject(Object *wat) {
   dprintf(2, "[Runtime::Trace] ");
   wat->displayDetail(2);
   dprintf(2, "\n");
+}
+
+intptr_t Runtime::endOfCode(intptr_t entry) {
+  auto info = RawObject::from(entry - RawObject::kFuncCodeOffset);
+  return entry + info->funcSize() - RawObject::kFuncCodeOffset;
 }
 
 void Runtime::printNewLine(int fd) {

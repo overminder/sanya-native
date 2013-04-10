@@ -138,7 +138,7 @@ void Object::gcScavenge(ThreadState *ts) {
       RawObject *info = raw()->cloInfo();
       if (!info) {
         // info is NULL? happens when a supercombinator
-        // is just created in the codegen.
+        // is just being compiled in the codegen.
         break;
       }
       Object **payload = raw()->cloPayload();
@@ -173,7 +173,7 @@ void Object::gcScavenge(ThreadState *ts) {
       }
 
       // And instructs valgrind to discard out-of-date jitted codes
-      // Must do this since otherwise we have changed our code
+      // Must do this since we have changed our code
       VALGRIND_DISCARD_TRANSLATIONS(
           info->funcCodeAs<char *>(),
           info->funcCodeAs<char *>() + info->funcSize() -

@@ -2,6 +2,8 @@
 #include <stdint.h>
 #include <stdio.h>
 
+#include <valgrind/memcheck.h>
+
 #include "util.hpp"
 #include "object.hpp"
 #include "parser.hpp"
@@ -72,6 +74,8 @@ Object *getMainClo(int argc, char **argv) {
 }
 
 int main(int argc, char **argv) {
+  //VALGRIND_MAKE_MEM_NOACCESS(0x7fefff700UL, 8);
+
   //ThreadState::global().display(2);
   callScheme_0(getMainClo(argc, argv));
   ThreadState::global().destroy();

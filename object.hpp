@@ -20,7 +20,9 @@ class Base {
   constexpr T as() { return reinterpret_cast<T>(this); }
 
   template<typename T>
-  static constexpr This *from(T wat) { return reinterpret_cast<This *>(wat); }
+  static constexpr This *from(T wat) {
+    return reinterpret_cast<This *>(wat);
+  }
 };
 
 // Untagged
@@ -38,6 +40,7 @@ class RawObject : public Base<RawObject> {
 
   enum {
     kTagShift                   = 0x4,
+    kTagMask                    = 0xf,
 
     kSizeOfPair                 = 0x10,
     kCarOffset                  = 0x0,
@@ -51,7 +54,7 @@ class RawObject : public Base<RawObject> {
     kFuncNameOffset             = 0x8,
     kFuncConstOffsetOffset      = 0x10,
     kFuncNumPayloadOffset       = 0x18,
-    kFuncSizeOffset             = 0x1c,
+    kFuncSizeOffset             = 0x1c, // including meta data
     kFuncCodeOffset             = 0x20, // variable-sized
 
     kCloInfoOffset              = 0x0,
@@ -84,7 +87,8 @@ class RawObject : public Base<RawObject> {
   Object *tagAs ## name() { return tag<k ## name ## Tag>();  }
 
 #define TAG_LIST(V) \
-  V(Pair) V(Symbol) V(Fixnum) V(Singleton) V(Closure) V(Vector) V(ForeignPtr)
+  V(Pair) V(Symbol) V(Fixnum) V(Singleton) \
+  V(Closure) V(Vector) V(ForeignPtr)
 TAG_LIST(MK_TAG_AS)
 #undef MK_TAG_AS
 
