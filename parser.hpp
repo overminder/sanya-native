@@ -10,15 +10,14 @@ class Object;
 
 class Parser {
  public:
-  Parser(const std::string &input)
-    : input(input)
-    , ix(0) { }
+  Parser(const std::string &input);
   
   Object *parseProg(bool *);
   Object *parse(bool *);
   Object *parseList(char);
   Object *parseFixnum(char);
   Object *parseAtom(char);
+  Object *parseQuote(char);
 
   void putBack() {
     --ix;
@@ -48,6 +47,11 @@ class Parser {
   }
 
  private:
+  Handle symQuote,
+         symQuasiQuote,
+         symUnquote,
+         symUnquoteSplicing;
+
   const std::string &input;
   intptr_t ix;
 };

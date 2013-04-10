@@ -24,4 +24,12 @@ class Runtime {
   static void printNewLine(int fd);
 };
 
+struct Option {
+  static Option &global();
+  static void init();
+
+  bool kTailCallOpt;
+  bool kInitialized;
+};
+
 #endif

@@ -106,13 +106,20 @@ CGModule::CGModule() {
   symPrimSub   = Object::internSymbol("-#");
   symPrimLt    = Object::internSymbol("<#");
   symPrimCons  = Object::internSymbol("cons#");
-  symPrimCar  = Object::internSymbol("car#");
-  symPrimCdr  = Object::internSymbol("cdr#");
-  symPrimPairp  = Object::internSymbol("pair?#");
-  symPrimNullp  = Object::internSymbol("null?#");
   symPrimTrace = Object::internSymbol("trace#");
   symPrimError = Object::internSymbol("error#");
   symMain      = Object::internSymbol("main");
+
+#define DEF_SYM(scmName, cxxName) \
+  symPrim ## cxxName ## p = Object::internSymbol(#scmName "#");
+PRIM_TAG_PREDICATES(DEF_SYM)
+PRIM_SINGLETON_PREDICATES(DEF_SYM)
+#undef DEF_SYM
+
+#define DEF_SYM(scmName, _unused, attrName) \
+  symPrim ## attrName = Object::internSymbol(#scmName "#");
+PRIM_ATTR_ACCESSORS(DEF_SYM)
+#undef DEF_SYM
 }
 
 CGModule::~CGModule() {
@@ -231,7 +238,8 @@ void CGFunction::compileFunction() {
     addNewLocal(arg);
   }
 
-  compileBody(lamBody, 2, true);
+  // TCO can be runtime-specified
+  compileBody(lamBody, 2, Option::global().kTailCallOpt);
 
   // Return last value on the stack
   popReg(rax);
@@ -516,48 +524,47 @@ bool CGFunction::tryPrimOp(const Handle &xs, bool isTail) {
 
     allocPair();
   }
-  else if (opName == parent->symPrimCar && len == 2) {
-    // (car# xs)
-    compileExpr(Util::arrayAt(xs, 1));
 
-    popReg(rax);
-    __ mov(rax, qword_ptr(rax,
-          RawObject::kCarOffset - RawObject::kPairTag));
-    pushReg(rax, kIsPtr);
+#define MK_IMPL(_unused, klsName, attrName)                             \
+  else if (opName == parent->symPrim ## attrName && len == 2) {         \
+    compileExpr(Util::arrayAt(xs, 1));                                  \
+    popReg(rax);                                                        \
+    __ mov(rax, qword_ptr(rax,                                          \
+          RawObject::k ## attrName ## Offset -                          \
+          RawObject::k ## klsName ## Tag));                             \
+    pushReg(rax, kIsPtr);                                               \
   }
-  else if (opName == parent->symPrimCdr && len == 2) {
-    // (cdr# xs)
-    compileExpr(Util::arrayAt(xs, 1));
+PRIM_ATTR_ACCESSORS(MK_IMPL)
+#undef MK_IMPL
 
-    popReg(rax);
-    __ mov(rax, qword_ptr(rax,
-          RawObject::kCdrOffset - RawObject::kPairTag));
-    pushReg(rax, kIsPtr);
+#define MK_IMPL(_unused, typeName)                                      \
+  else if (opName == parent->symPrim ## typeName ## p && len == 2) {    \
+    compileExpr(Util::arrayAt(xs, 1));                                  \
+    popReg(rax);                                                        \
+    __ and_(eax, RawObject::kTagMask);                                  \
+    __ cmp(eax, RawObject::k ## typeName ## Tag);                       \
+    __ mov(ecx, Object::newTrue()->as<intptr_t>());                     \
+    __ mov(eax, Object::newFalse()->as<intptr_t>());                    \
+    __ cmove(eax, ecx);                                                 \
+    pushReg(rax, kIsPtr);                                               \
   }
-  else if (opName == parent->symPrimPairp && len == 2) {
-    // (pair?# xs)
-    compileExpr(Util::arrayAt(xs, 1));
+PRIM_TAG_PREDICATES(MK_IMPL)
+#undef MK_IMPL
 
-    popReg(rax);
-    __ and_(eax, RawObject::kTagMask);
-    __ cmp(eax, RawObject::kPairTag);
-    __ mov(ecx, Object::newTrue()->as<intptr_t>());
-    __ mov(eax, Object::newFalse()->as<intptr_t>());
-    __ cmove(eax, ecx);
-    pushReg(rax, kIsPtr);
+#define MK_IMPL(_unused, objName)                                       \
+  else if (opName == parent->symPrimNilp && len == 2) {                 \
+    compileExpr(Util::arrayAt(xs, 1));                                  \
+    popReg(rax);                                                        \
+    __ mov(ecx, reinterpret_cast<intptr_t>(Object::new ## objName()));  \
+    __ cmp(rax, rcx);                                                   \
+    __ mov(ecx, Object::newTrue()->as<intptr_t>());                     \
+    __ mov(eax, Object::newFalse()->as<intptr_t>());                    \
+    __ cmove(eax, ecx);                                                 \
+    pushReg(rax, kIsPtr);                                               \
   }
-  else if (opName == parent->symPrimNullp && len == 2) {
-    // (null?# xs)
-    compileExpr(Util::arrayAt(xs, 1));
+PRIM_SINGLETON_PREDICATES(MK_IMPL)
+#undef MK_IMPL
 
-    popReg(rax);
-    __ mov(ecx, reinterpret_cast<intptr_t>(Object::newNil()));
-    __ cmp(rax, rcx);
-    __ mov(ecx, Object::newTrue()->as<intptr_t>());
-    __ mov(eax, Object::newFalse()->as<intptr_t>());
-    __ cmove(eax, ecx);
-    pushReg(rax, kIsPtr);
-  }
   else if (opName == parent->symPrimTrace && len == 3) {
     compileExpr(Util::arrayAt(xs, 1));
     popReg(rdi);
@@ -747,7 +754,6 @@ intptr_t CGFunction::makeFrameDescr() {
   return fd.pack();
 }
 
-// Use rax only
 void CGFunction::syncThreadState() {
   // Store gc info
   __ mov(

@@ -10,6 +10,13 @@
 #include "codegen2.hpp"
 #include "runtime.hpp"
 
+// Global flags
+struct Flags {
+  bool kTailCallOpt;
+};
+
+Flags flag;
+
 extern "C" {
   extern Object *Scheme_asmEntry(
       Object *, void *, intptr_t, intptr_t, ThreadState *);
@@ -77,6 +84,8 @@ int main(int argc, char **argv) {
   //VALGRIND_MAKE_MEM_NOACCESS(0x7fefff700UL, 8);
 
   //ThreadState::global().display(2);
+  Option::init();
+
   callScheme_0(getMainClo(argc, argv));
   ThreadState::global().destroy();
   return 0;

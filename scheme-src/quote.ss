@@ -1,6 +1,6 @@
 (define main
   (lambda ()
-    (quote (1 2 3))))
+    (trace# '(1 2 3) 0)))
 
 (define bar
   (lambda ()

@@ -33,6 +33,22 @@ class Module {
 
 class CGFunction;
 
+#define PRIM_TAG_PREDICATES(V)  \
+  V(pair?,      Pair)           \
+  V(symbol?,    Symbol)         \
+  V(integer?,   Fixnum)         \
+  V(procedure?, Closure)        \
+  V(vector?,    Vector)
+
+#define PRIM_SINGLETON_PREDICATES(V) \
+  V(true?,      True)                \
+  V(false?,     False)               \
+  V(null?,      Nil)
+
+#define PRIM_ATTR_ACCESSORS(V)   \
+  V(car, Pair, Car)              \
+  V(cdr, Pair, Cdr)
+
 class CGModule {
  public:
   CGModule();
@@ -48,23 +64,32 @@ class CGModule {
   Handle moduleRoot, moduleGlobalVector;
 
   Handle symDefine,
+         symSete,
          symLambda,
          symQuote,
          symBegin,
          symIf,
+
          symPrimAdd,
          symPrimSub,
          symPrimLt,
 
          symPrimCons,
-         symPrimCar,
-         symPrimCdr,
-         symPrimPairp,
-         symPrimNullp,
 
          symPrimTrace,
          symPrimError,
          symMain;
+
+#define MK_SYM(_unused, typeName) \
+  Handle symPrim ## typeName ## p;
+PRIM_TAG_PREDICATES(MK_SYM)
+PRIM_SINGLETON_PREDICATES(MK_SYM)
+#undef MK_SYM
+
+#define MK_SYM(_unused, _unused2, attrName) \
+  Handle symPrim ## attrName;
+PRIM_ATTR_ACCESSORS(MK_SYM)
+#undef MK_SYM
 
   std::vector<CGFunction *> cgfuncs;
 
@@ -93,6 +118,7 @@ class CGFunction {
   bool tryBegin(const Handle &expr, bool isTail);
   bool tryPrimOp(const Handle &expr, bool isTail);
 
+  // Stores regs back to ThreadState. Uses %rax only.
   void syncThreadState();
 
   intptr_t getThisClosure();

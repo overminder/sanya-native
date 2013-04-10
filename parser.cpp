@@ -2,6 +2,16 @@
 #include "object.hpp"
 #include "parser.hpp"
 
+Parser::Parser(const std::string &input)
+  : input(input)
+  , ix(0) {
+
+  symQuote = Object::internSymbol("quote");
+  symQuasiQuote = Object::internSymbol("quasiquote");
+  symUnquote = Object::internSymbol("unquote");
+  symUnquoteSplicing = Object::internSymbol("unquote-splicing");
+}
+
 Object *Parser::parseProg(bool *outOk) {
   bool ok;
   Handle head = Object::newNil(),
@@ -40,6 +50,9 @@ Object *Parser::parse(bool *ok) {
     case '0': case '1': case '2': case '3': case '4':
     case '5': case '6': case '7': case '8': case '9':
       return parseFixnum(c);
+
+    case '\'': case '`': case ',':
+      return parseQuote(c);
 
     default:
       if (!*ok) {
@@ -135,5 +148,31 @@ Object *Parser::parseAtom(char open) {
     xs << c;
   }
   return Object::internSymbol(xs.str().c_str());
+}
+
+Object *Parser::parseQuote(char fst) {
+  Handle tag;
+  if (fst == '\'') {
+    tag = symQuote;
+  }
+  else if (fst == ',') {
+    if (getNext() == '@') {
+      tag = symUnquoteSplicing;
+    }
+    else {
+      putBack();
+      tag = symUnquote;
+    }
+  }
+  else {
+    assert(fst == '`');
+    tag = symQuasiQuote;
+  }
+
+  bool ok;
+  Handle body = parse(&ok);
+  assert(ok);
+  Handle wrapped = Object::newPair(body, Object::newNil());
+  return Object::newPair(tag, wrapped);
 }
 
